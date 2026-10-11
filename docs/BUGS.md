@@ -64,3 +64,22 @@ component. **Fix:** derive RUN from `BASH_SOURCE`. See LESSONS #1.
 `input_dir = .../nise_bdfp44_v5/input`, and NISE writes its iterations under `input_dir` — v6b
 would have written into v5's closed archive and folded against v5's untagged component.
 **Caught by:** a pre-launch sweep for hardcoded paths. Eleven files carried them.
+
+---
+
+## 2025-10-11 — `iptm` column collision between monomer and dimer tables
+
+**Symptom:** merging `results/af3_dimer/interface_pae.csv` into `results/final/shortlist.csv`
+on a bare `iptm` key produced `iptm_x`/`iptm_y` and a `KeyError`, or worse, silently
+selected the wrong one.
+
+**Cause:** both tables carry a column named `iptm` and they are different quantities.
+The shortlist's is the **monomer protein–ligand** ipTM from the folding run. The dimer
+table's is the **two-copy** ipTM. Nothing in either name says which.
+
+**Fix:** `make_report.py` maps the dimer file's `iptm` to `dimer_iptm` on merge, with an
+inline comment. Any new merge of these two tables must do the same.
+
+**Lesson:** two tables in the same results tree that use one name for two quantities is a
+latent wrong-number bug, not just a merge nuisance. Rename at the boundary, not at the
+point of use.
