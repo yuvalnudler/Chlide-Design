@@ -1,0 +1,40 @@
+[project]
+name = "chlide-design"
+version = "0.1.0"
+description = "Consolidated pipeline for designing chlorophyllide-binding proteins"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "pyyaml",
+    "numpy",
+    "pandas",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff"]
+
+[project.scripts]
+chlide = "chlide.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests that need a GPU are opt-in: pytest -m gpu
+markers = [
+    "gpu: requires a free GPU and the boltz/af3 conda envs",
+    "slow: takes more than a few seconds",
+]
+addopts = "-m 'not gpu' --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
