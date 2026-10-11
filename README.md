@@ -67,6 +67,7 @@ this repo exists to end. It has already produced one stale-label bug per copy
 - **[BUGS.md](docs/BUGS.md)** — append-only incident log.
 - **[ENGINES.md](docs/ENGINES.md)** — per-engine quirks and traps. Neither engine is a drop-in for
   the other; the differences are documented, not hidden.
+- **[NEXT.md](docs/NEXT.md)** — handoff note: state, next steps, outstanding fixes. Read first.
 - **[CALIBRATION.md](docs/CALIBRATION.md)** — every gate value with the measurement that
   set it, including why the paper's dimer pAE 14 (an AF2 number) is kept for AF3 even
   though AF3's own ipTM puts the separation at 9.
