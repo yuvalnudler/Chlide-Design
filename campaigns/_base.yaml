@@ -1,0 +1,68 @@
+# Shared defaults for every chlorophyllide-on-BDFP44 campaign.
+# A campaign file overrides only what it actually changes -- if two campaigns
+# differ in one line, their YAMLs should differ in one line.
+
+ligand:
+  code: CLAOX
+  component: CLA-OXY
+  source: input/chlides_fixed.mmcif
+  deprotonated: true
+  required_config: S
+  stereocentre_atom: CBD
+  # 13(2)-hydroxy chlorophyllide a, disconnected-Mg, C17 propionate as [O-].
+  # 46 heavy atoms (C35H34MgN4O6), matching input/CLAOX.pkl exactly.
+  # The Mg MUST stay disconnected: ETKDGv3 cannot embed a bonded form and Boltz
+  # hard-fails with "Failed to compute 3D conformer". The CCD keeps its four
+  # Mg-N dative bonds; this string does not.
+  smiles: "C=Cc1c(C)c2cc3nc(c4c5[n-]c(cc6nc(cc1[n-]2)C(C)=C6CC)c(C)c5C(=O)[C@]4(O)C(=O)OC)[C@@H](CCC(=O)[O-])[C@@H]3C.[Mg+2]"
+  # Post-protonation atom names: protonate_and_add_conect_records.py strips digits
+  # off the CCD name and appends a per-prefix counter (MG -> MG1, O1A -> OA1).
+  rmsd_mask_atoms:      [CAA1, CBA1, CGA1, OA1, OA2]   # the floppy C17 propionate arm
+  atoms_enforce_buried: [MG1, NA1, NB1, NC1, ND1]      # metal core stays in the pocket
+  atoms_enforce_exposed: [OA1, OA2]
+  # OCD1 is deliberately absent from atoms_enforce_buried. That set is an
+  # all-or-nothing gate, and v4 showed the ring-E edge is exactly where burial
+  # fails. A hydroxyl may legitimately face solvent. Burial of OCD1 is REPORTED
+  # in the cascade, never gated on.
+
+scaffold:
+  pdb: input/bdfp44_claox_his85_protonated.pdb
+  # HIS85 is the sole histidine and the axial ligand for the Mg. 0-based and
+  # positional: 85 - 1 = 84, and it survives Boltz renumbering the output 1-135.
+  axial_his_resindex: 84
+  burial_alpha: 50.0
+
+loop:
+  iterations: 25
+  per_backbone: 500          # x 3 backbones = 1500/iteration, the paper's production scale
+  top_backbones: 3
+  sequences_sampled_at_once: 30
+  objective: ligand_plddt
+  convergence:
+    metric: p90_ligand_plddt
+    window: 3
+    eps: 0.002
+    patience: 7
+    min_iterations: 10
+
+gates:
+  ligand_plddt: 0.80
+  protein_plddt: 0.80
+  self_consistency_ligand_rmsd: 2.5
+  self_consistency_protein_rmsd: 1.5
+  rmsd_use_chirality: false
+  packstat: 0.55
+  apo_clashes_max: 0
+  allow_buried_charged: false
+  coordination_window: [2.0, 2.6]
+  dimer_interface_pae: 14.0
+  dimer_pae_grey_band: 9.0
+  dimer_contact_cutoff: 5.0
+
+stages:
+  generate: {enabled: false}   # backbone generation is off until an engine is validated on chlide
+
+compute:
+  reserve_cpus: 16
+  relax_workers: 12
+  relax_timeout: 1800

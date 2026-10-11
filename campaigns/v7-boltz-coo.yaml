@@ -1,0 +1,15 @@
+# v7 -- Boltz-2x tip, deprotonated carboxylate, chirality enforced.
+# Reproduces run_nise_bdfp44_v7.py. Ran 14 iterations, converged at 13.
+# 11,201 designs, 100% S at 13-2, shortlist 33-34, best BUNs 10.
+name: v7-boltz-coo
+description: >
+  Boltz-2x leads, AF3 cross-checks. Patched ConnectionsPotential gives a two-sided
+  2.0-2.6 A His-Mg window; upstream's flat bottom is one-sided and collapses the
+  bond to ~1.52 A. Chirality is enforced by 12 ChiralAtomPotential constraints,
+  which require _CIPRank on every atom with the Mg tag cleared.
+
+engine:
+  fold: boltz
+  cross_check: auto          # -> af3
+  constrain_his_mg: true
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]

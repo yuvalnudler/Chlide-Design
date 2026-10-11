@@ -1,0 +1,22 @@
+# v8 -- AlphaFold3 tip, deprotonated carboxylate. The best campaign so far.
+# Reproduces run_nise_bdfp44_v8.py. Ran 17 iterations, converged at 16.
+# 23,200 designs, p90 ligand pLDDT 0.9640, shortlist 142, best BUNs 6.
+#
+# Against v7 this file differs in exactly TWO lines (fold, constrain_his_mg).
+# In the old model that same difference required forking the whole 1200-line
+# driver; the two `params` dicts were byte-identical.
+name: v8-af3-coo
+description: >
+  AlphaFold3 leads, Boltz cross-checks. No His-Mg restraint: AF3's bondedAtomPairs
+  has no distance window, crushes the bond to 1.50 A and flips 13-2 to R. Rosetta
+  relax forms the coordination instead (4.22 -> 2.50 A), and the relax gate is what
+  enforces it. AF3 honours pdbx_stereo_config only ~59% of the time on designed
+  sequences, so chirality never converged here (59% -> 70%) and the 13-2 gate does
+  the work downstream. Measured 10.4 s/design/GPU with --input_dir batching, which
+  is 2.2x FASTER than Boltz, not slower.
+
+engine:
+  fold: af3
+  cross_check: auto          # -> boltz
+  constrain_his_mg: false
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
