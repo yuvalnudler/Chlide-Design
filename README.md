@@ -34,6 +34,21 @@ byte-identical.
 Not yet built: `chlide run`, the engine adapters, the stage modules, provenance and the
 watchdog. See the phase table in the plan.
 
+### What the campaigns produce today
+
+v8 (AF3-led, the best campaign: 17 iterations, 23,200 designs, shortlist 142, best BUNs 6)
+and v7 (Boltz-led) both render a full HTML report from one shared, engine-aware script —
+Shrake–Rupley ligand burial (whole / chlorin core / apolar), both engines' pLDDT, the
+cross-check engine's own composite confidence, the two-copy dimer pair, and for v8 a
+**Suggested order** table whose rationale is derived from each design's standing in the
+shortlist. Those scripts still live in the campaign directories; migrating them here as
+`stages/report.py` is the first Phase 2 increment.
+
+**This is the open risk.** Every edit to `make_report.py` or `paper_figures.py` is still
+hand-copied between `nise_bdfp44_v7/tools/` and `nise_bdfp44_v8/tools/` — the exact practice
+this repo exists to end. It has already produced one stale-label bug per copy
+(`docs/BUGS.md`, 2025-10-11).
+
 ## Layout
 
 | path | what |

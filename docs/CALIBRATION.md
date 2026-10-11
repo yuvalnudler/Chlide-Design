@@ -142,6 +142,49 @@ Paper's tested binders had BUNs Score **16–28** and Kd 0.12–16.8 µM, 4/4 bo
 v8 best is **6** — far better on this axis than anything they put in a tube, which
 says more about BUNs as a selector than about our designs.
 
+## Ligand burial — a measure, never a gate **[ours]**
+
+```
+buried_fraction = 1 - SASA(ligand in complex) / SASA(ligand alone, SAME coords)
+```
+
+Shrake–Rupley, **probe 1.4 Å**, Bondi radii (Mg 1.73 Å, absent from Bondi's table), 960
+points/atom, heavy atoms only. Implemented in `sasa_rank.py` rather than imported, so the
+radii and probe are explicit and auditable — **FreeSASA is not installed on this machine**,
+and the hand-rolled version is the same algorithm FreeSASA runs by default. Using the
+identical conformer for the free-ligand reference means the ratio isolates occlusion by
+protein and is unaffected by the ligand's own conformation. The cascade imports this module
+directly, so the whole shortlist and the top-25 detail table share one set of constants.
+
+Why it exists separately from the in-loop burial test: NISE's alpha-shape gate casts a ray at
+a mesh built through the **CA trace** and counts crossings. That answers "is this atom inside
+the polypeptide envelope" — it knows nothing about sidechains and nothing about solvent, so an
+atom in a water-filled cavity counts as buried. SASA asks whether a water can touch it.
+
+**v8, n=142 shortlist:**
+
+| region | median | why it matters |
+|---|---|---|
+| whole ligand | ~62% | **capped by design** — see below |
+| chlorin core (macrocycle + Mg) | **82%** | the number that should be high; this is what must be desolvated |
+| apolar | 68.5% | COMBS docking filter target was ≥ 0.75 |
+| propionate | 43% | *should* stay exposed |
+| Mg SASA | 3.8 Å² (range 1.2–5.5) | ~0 means the coordination site is sealed from water |
+
+**Do not read whole-ligand burial as a quality score.** The C17 propionate is charged and we
+*enforced* its exposure during sampling (`atoms_enforce_exposed: [OA1, OA2]`), so it drags the
+whole-ligand figure down on purpose. A design that buries it has paid a desolvation penalty
+for nothing. Rank on **core** burial; read whole-ligand only alongside the propionate column.
+
+**Burial is scored, never filtered.** A hard burial gate would have dropped v4's best-enclosed
+design, and the in-loop gate already had to run at alpha=50 because the paper's default of 9.0
+rejects every BDFP44 design at iteration 0 — the chlorophyllide cleft is far shallower than the
+four-helix bundle the method was developed on.
+
+**Open:** v8's apolar burial is 0.690 against v5's 0.884. That gap is the cost of the correct
+(deprotonated, 13²-S) ligand, not a regression in design quality — v5 was burying a neutral
+acid. Neither reaches the COMBS 0.75 target.
+
 ## Engine-dependent gates **[ours]**
 
 Ligand pLDDT does **not** transfer between engines — Boltz median 0.865 vs AF3 0.753
