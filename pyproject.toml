@@ -38,3 +38,12 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Migrated verbatim from the campaigns. Their long lines are the COLUMN TABLES --
+# one row per reported measure, each carrying the tooltip that explains it. Wrapping
+# those strings would break the table's alignment, which is what makes it readable.
+# The ignore is per-file and deliberate; it lifts when these become src/chlide/stages/.
+"tools/make_report.py" = ["E501"]
+"tools/paper_figures.py" = ["E501"]
+"tools/sasa_rank.py" = ["E501"]

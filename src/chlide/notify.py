@@ -1,11 +1,22 @@
-"""Telegram notifications — vendored from main_pipeline/scripts/telegram.py.
+"""Minimal Telegram Bot API client for pipeline notifications.
 
-Stdlib only, never raises, credentials from the environment or
-~/.config/pipeline_telegram.env (never from a CLI argument, never from this file).
-Vendored rather than imported so the repo has no path dependency on main_pipeline;
-that sys.path.insert of an absolute campaign path is one of the five hardcoded
-cross-tree references this migration exists to remove.
-"""
+Vendored verbatim from main_pipeline/scripts/telegram.py (body unchanged below this
+docstring), so this repo carries no path dependency on that tree. The import it
+replaces was `sys.path.insert(0, '/home/data/yuvaln/main_pipeline/scripts')` -- one of
+the hardcoded cross-tree references this migration exists to remove.
+
+STANDARD LIBRARY ONLY, on purpose. The pipeline spans several conda envs (snakemake_env,
+af3, lasermpnn, ligandmpnn_env, openmm); making a notification tool depend on `requests`
+would mean installing it into whichever env happens to call it, which is a needless way
+for a *notifier* to break a run.
+
+Every public function returns bool and never raises. A notifier that can take down its
+caller is worse than no notifier -- and the caller here is a watcher sitting next to a
+14-hour GPU campaign.
+
+Credentials come from ~/.config/pipeline_telegram.env (mode 0600), falling back to the
+environment. The token is deliberately never accepted as a CLI argument: that would put a
+live credential into `ps` output and shell history.
 """
 from __future__ import annotations
 
