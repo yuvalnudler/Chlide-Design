@@ -83,3 +83,28 @@ inline comment. Any new merge of these two tables must do the same.
 **Lesson:** two tables in the same results tree that use one name for two quantities is a
 latent wrong-number bug, not just a merge nuisance. Rename at the boundary, not at the
 point of use.
+
+---
+
+## 2025-10-11 — hardcoded engine names in shared scripts (recurring class)
+
+**Symptom:** v8's figure 4 legend read "Boltz prediction" while the histogram plotted AF3's
+output. The report's cross-fold columns said "X-fold", hiding which engine they came from.
+Then the newly added figure 6 asserted "the distribution is bimodal" in its title — true for
+v8 (AF3-led), **false for v7**, whose distribution is flat.
+
+**Cause:** the same script serves campaigns with different leading engines, and every label
+that names an engine — or asserts a property of the data — was written for whichever campaign
+it was first run on. The directory tree is no help: `af3_adapter.to_boltz_layout` writes AF3
+output into a `boltz_results_*` tree on purpose, so the *layout* proves nothing. Only the
+driver's import does.
+
+**Fix:** `paper_figures.engine()` and `make_report._engine()` / `_cross_engine()` detect the
+leading and cross-check engines by grepping the driver for `from af3_adapter import`. Labels
+are `{ENG}`/`{XENG}` placeholders substituted at render time. Figure 6's bimodality claim is
+now *measured* (trough < 0.6 × the smaller of the two modal peaks) and the title states
+"unimodal: no valley" when there isn't one.
+
+**Lesson:** a label that names an engine, or asserts a shape in the data, is a claim. In a
+script shared across campaigns it must be derived, not typed. Two of these shipped before
+anyone noticed; the third was caught only because the fix for the first two made us re-run v7.
