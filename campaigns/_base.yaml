@@ -5,6 +5,10 @@
 ligand:
   code: CLAOX
   component: CLA-OXY
+  # Shared input, not a campaign artifact. Resolved against the run directory first, then
+  # $CHLIDES_MMCIF (default: main_pipeline/input/chlides_fixed.mmcif). Kept RELATIVE here
+  # because an absolute path in a campaign file is how five campaigns inherited their
+  # predecessor's tree.
   source: input/chlides_fixed.mmcif
   deprotonated: true
   required_config: S
@@ -26,7 +30,7 @@ ligand:
   # in the cascade, never gated on.
 
 scaffold:
-  pdb: input/bdfp44_claox_his85_protonated.pdb
+  pdb: input/input_backbones/bdfp44_claox_his85_protonated.pdb
   # HIS85 is the sole histidine and the axial ligand for the Mg. 0-based and
   # positional: 85 - 1 = 84, and it survives Boltz renumbering the output 1-135.
   axial_his_resindex: 84
@@ -55,6 +59,7 @@ gates:
   apo_clashes_max: 0
   allow_buried_charged: false
   coordination_window: [2.0, 2.6]
+  metal_r0: 2.15            # physical Mg-N(His); the restraint TARGET, not the window midpoint
   dimer_interface_pae: 14.0
   dimer_pae_grey_band: 9.0
   dimer_contact_cutoff: 5.0

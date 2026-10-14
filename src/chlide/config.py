@@ -14,6 +14,7 @@ if you remove one, you are re-enabling that bug. See docs/LESSONS.md.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -21,7 +22,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-__all__ = ['CampaignConfig', 'load_campaign', 'ConfigError']
+__all__ = ['CampaignConfig', 'load_campaign', 'resolve_input', 'ConfigError']
 
 
 class ConfigError(ValueError):
@@ -209,6 +210,11 @@ class GateConfig(_Base):
     apo_clashes_max: int = Field(default=0, ge=0)
     allow_buried_charged: bool = False
     coordination_window: tuple[float, float] = (2.0, 2.6)
+    # The RESTRAINT TARGET, which is not the window's midpoint. 2.15 A is the physical
+    # Mg-N(His) distance; Rosetta pulls to it with a FlatHarmonic and the window above is what
+    # the result is then ACCEPTED against. Deriving one from the other (midpoint = 2.30) silently
+    # moves the restraint 0.15 A off the physical bond.
+    metal_r0: float = Field(default=2.15, gt=0)
 
     # Two-copy aggregation proxy. The paper's 14 is AF2-multimer-derived and was paired
     # with visual inspection we do not perform. On AF3-folded v8 the distribution is
@@ -224,6 +230,11 @@ class GateConfig(_Base):
         lo, hi = self.coordination_window
         if lo >= hi:
             raise ConfigError(f'coordination_window {self.coordination_window} is not ordered')
+        if not lo <= self.metal_r0 <= hi:
+            raise ConfigError(
+                f'metal_r0 {self.metal_r0} lies outside coordination_window '
+                f'{self.coordination_window}: the restraint would pull every design to a '
+                f'distance the gate then rejects.')
         if self.dimer_pae_grey_band > self.dimer_interface_pae:
             raise ConfigError(
                 f'dimer_pae_grey_band ({self.dimer_pae_grey_band}) exceeds '
@@ -311,6 +322,26 @@ class CampaignConfig(_Base):
         return (f'{self.name}: {self.engine.fold} fold / {x} cross-check, '
                 f'{self.loop.iterations} iterations x {self.loop.per_iteration} designs, '
                 f'ligand {self.ligand.code}{charge}{chiral}')
+
+
+def resolve_input(run: Path, rel: Path, env_var: str | None = None,
+                  fallback: str | None = None) -> Path | None:
+    """Find a declared input: run directory first, then a named shared location.
+
+    Campaign files hold RELATIVE paths only -- an absolute one is how five campaigns inherited
+    their predecessor's tree. But some inputs genuinely are shared across campaigns (the
+    chlorophyllide mmCIF, the Boltz checkpoints), so a relative name is resolved against the run
+    directory first and a shared location second. Returns None if neither has it, so the caller
+    can report what is missing rather than failing on a path that was never going to exist.
+    """
+    local = run / rel
+    if local.is_file():
+        return local
+    shared = os.environ.get(env_var) if env_var else None
+    for cand in (shared, fallback):
+        if cand and Path(cand).is_file():
+            return Path(cand)
+    return None
 
 
 def load_campaign(path: str | Path, overrides: dict | None = None) -> CampaignConfig:
