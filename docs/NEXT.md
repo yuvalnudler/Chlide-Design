@@ -15,7 +15,7 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 | 4 backbone generation (default-off) | not started |
 | 5 docs, golden tests, data migration | `CALIBRATION.md` and this file landed early |
 
-37 tests pass, no GPU needed. `pytest -q` is the gate.
+56 tests pass, no GPU needed. `pytest -q` is the gate.
 
 ## What is migrated
 
