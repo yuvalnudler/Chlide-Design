@@ -101,10 +101,13 @@ def nise_params(cfg: CampaignConfig, run_dir: Path, *, debug: bool = False) -> d
         model_checkpoint=(nise_directory() / 'LASErMPNN' /
                           'model_weights/laser_weights_0p1A_noise_ligandmpnn_split.pt'),
 
-        num_iterations=cfg.loop.iterations,
+        # debug is a SMOKE TEST, and it has to actually be small. Without these two
+        # reductions `--debug` launches a full production run: 25 iterations x 1500
+        # designs, which is GPU-days spent proving the wiring works.
+        num_iterations=2 if debug else cfg.loop.iterations,
         num_top_backbones_per_round=cfg.loop.top_backbones,
         sequences_sampled_at_once=cfg.loop.sequences_sampled_at_once,
-        sequences_sampled_per_backbone=cfg.loop.per_backbone,
+        sequences_sampled_per_backbone=(len(devices) if debug else cfg.loop.per_backbone),
 
         # BDFP44's cleft is far shallower than the four-helix bundle NISE was developed on. At
         # the default alpha 9.0 only 10/45 ligand atoms read buried and the Mg reads EXPOSED,
