@@ -236,3 +236,27 @@ def test_yaml_boilerplate_carries_affinity_and_the_metal_bond():
     assert 'constraints:' in y and 'NE2' in y and 'MG' in y
     assert 'msa: empty' in y
     assert mod.get_boltz_yaml_boilerplate('MAAA', 'C', False).count('affinity') == 0
+
+
+def test_derived_fixbeta_backbones_are_not_counted_as_inputs(tmp_path):
+    """sample_sequences writes `<stem>_fixbeta.pdb` NEXT TO the input backbone, so a cold
+    start in a directory a previous attempt used sees two and dies with "More than one input
+    backbone not currently supported". It only bites on a cold start, which is why eight
+    campaigns never hit it -- until a smoke test restarted iteration 0 twice in five minutes.
+    """
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location('_drv2', str(DRIVER))
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ['drv']
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        pytest.skip('driver dependencies unavailable')
+    finally:
+        sys.argv = argv
+    (tmp_path / 'scaffold.pdb').write_text('ATOM\n')
+    (tmp_path / 'scaffold_fixbeta.pdb').write_text('ATOM\n')
+    (tmp_path / 'notes.txt').write_text('x')
+    got = [p.name for p in mod._input_backbones(tmp_path)]
+    assert got == ['scaffold.pdb'], got

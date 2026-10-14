@@ -138,6 +138,22 @@ def get_boltz_yaml_boilerplate(sequence: str, smiles: str, predict_affinity: boo
     return boltz_yaml
         
 
+def _input_backbones(dir_path: Path) -> list:
+    """Real input backbones, excluding the driver's own derived artifacts.
+
+    sample_sequences() writes `<stem>_fixbeta.pdb` NEXT TO the input backbone -- a copy with
+    the b-factor column repurposed to mark fixed-identity residues. That file then looks like
+    a second input backbone, so a COLD START in a directory where a previous attempt already
+    ran dies with "More than one input backbone not currently supported".
+
+    It only bites on a cold start (the guard checks start_iteration == 0), which is why
+    resumes never hit it and why it survived eight campaigns: nobody restarted iteration 0 in
+    a used directory until a smoke test did it twice in five minutes.
+    """
+    return sorted(x for x in dir_path.iterdir()
+                  if x.is_file() and x.suffix == '.pdb' and not x.stem.endswith('_fixbeta'))
+
+
 def check_input(dir_path: Path, model_weights_path: Path):
     if not dir_path.exists():
         raise FileNotFoundError(f"Path {dir_path} does not exist.")
@@ -145,7 +161,7 @@ def check_input(dir_path: Path, model_weights_path: Path):
     if not dir_path.is_dir():
         raise NotADirectoryError(f"Path {dir_path} is not a directory.")
     
-    num_files = len([x for x in dir_path.iterdir() if x.is_file() and x.suffix == '.pdb'])
+    num_files = len(_input_backbones(dir_path))
     if num_files == 0:
         raise FileNotFoundError(f"No PDB files found in {dir_path}")
 
@@ -289,9 +305,9 @@ class DesignCampaign:
 
         # Set path and priority for input backbones.
         if self.keep_input_backbone_in_queue:
-            self.backbone_queue = [(x, torch.inf) for x in self.input_backbones_path.iterdir() if x.is_file() and x.suffix == '.pdb']
+            self.backbone_queue = [(x, torch.inf) for x in _input_backbones(self.input_backbones_path)]
         else:
-            self.backbone_queue = [(x, 0) for x in self.input_backbones_path.iterdir() if x.is_file() and x.suffix == '.pdb']
+            self.backbone_queue = [(x, 0) for x in _input_backbones(self.input_backbones_path)]
         
         # Whether to keep the pose that generates the highest confidence sequences.
         self.keep_best_generator_backbone = keep_best_generator_backbone
