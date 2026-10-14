@@ -109,6 +109,31 @@ def _run(args) -> int:
                         dry_run=args.dry_run)
 
 
+
+def _setup(args) -> int:
+    """Build a run directory and REFUSE to call it ready unless the inputs match the config."""
+    from chlide.setup_run import seed_run, verify_inputs
+    cfg = load_campaign(args.campaign)
+    run = Path(args.out).resolve()
+
+    if args.seed_from:
+        rep = seed_run(cfg, run, Path(args.seed_from))
+        print(f'seeded {run} from {rep["seed_from"]}')
+        print(f'  {len(rep["copied"])} files copied, {len(rep["linked"])} entries linked')
+        for ln in rep['linked']:
+            print(f'    {ln}')
+
+    problems = verify_inputs(cfg, run)
+    if problems:
+        print(f'\nNOT READY -- {len(problems)} problem(s):')
+        for p in problems:
+            print(f'  - {p}')
+        return 1
+    print('\nverified: ligand charge, carboxylate protonation, axial histidine, '
+          'and the Boltz cache all match the campaign.')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog='chlide')
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -122,6 +147,13 @@ def main(argv: list[str] | None = None) -> int:
 
     f = sub.add_parser('finish', help='the terminal pipeline for a run directory')
     f.add_argument('run_dir', type=Path)
+
+    s = sub.add_parser('setup', help='build and verify a run directory')
+    s.add_argument('campaign', type=Path)
+    s.add_argument('--out', type=Path, required=True)
+    s.add_argument('--seed-from', type=Path, default=None,
+                   help='a finished campaign with the SAME ligand and scaffold to copy '
+                        'inputs from; everything copied is then verified against the config')
 
     r = sub.add_parser('run', help='launch a campaign from a YAML')
     r.add_argument('campaign', type=Path)
@@ -138,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         return _plan(a)
     if a.cmd == 'finish':
         return _finish(a)
+    if a.cmd == 'setup':
+        return _setup(a)
     if a.cmd == 'run':
         return _run(a)
     ap.error(f'unknown command {a.cmd}')

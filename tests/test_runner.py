@@ -219,3 +219,51 @@ def test_lock_reclaims_an_expired_one(tmp_path):
 def test_foreign_process_detection_excludes_us():
     me = os.environ.get('USER')
     assert all(p.user != me for p in foreign_processes())
+
+
+# ------------------------------------------------------------------ input verification
+
+def _campaign(name):
+    from chlide.config import load_campaign
+    return load_campaign(ROOT / 'campaigns' / name)
+
+
+def test_verifier_passes_a_correctly_deprotonated_campaign():
+    from chlide.setup_run import verify_inputs
+    v7 = Path('/home/data/yuvaln/nise_bdfp44_v7')
+    if not v7.is_dir():
+        pytest.skip('v7 not present')
+    assert verify_inputs(_campaign('v9-boltz-pbind.yaml'), v7) == []
+
+
+def test_verifier_catches_the_v5_acid_proton():
+    """v5 used the neutral acid. The incident showed in THREE places -- the component's net
+    charge, a `BOND OA2 H13` in the Rosetta params, and a missing formal charge -- and the
+    verifier must catch all three, because v7 fixed two of them before anyone noticed the third.
+    """
+    from chlide.setup_run import verify_inputs
+    v5 = Path('/home/data/yuvaln/nise_bdfp44_v5')
+    if not v5.is_dir():
+        pytest.skip('v5 not present')
+    probs = ' | '.join(verify_inputs(_campaign('v9-boltz-pbind.yaml'), v5))
+    assert 'net charge' in probs
+    assert 'OA2-H13' in probs or 'hydrogen to the carboxylate' in probs
+    assert 'FORMAL' in probs
+
+
+def test_verifier_tests_the_bond_not_the_atom_name():
+    """An earlier version matched the string 'H13' and flagged v7, where H13 is a METHYL
+    hydrogen on CMB1. The incident was a hydrogen BONDED to a carboxylate oxygen."""
+    src = (ROOT / 'src' / 'chlide' / 'setup_run.py').read_text()
+    assert "f[0] == 'BOND'" in src
+    assert "' H13 ' in body" not in src
+
+
+def test_pbind_campaign_requires_the_affinity_checkpoint():
+    """P(bind) needs boltz2_aff.ckpt, a different file from the confidence checkpoint."""
+    from chlide.setup_run import verify_inputs
+    v9 = Path('/home/data/yuvaln/nise_bdfp44_v9')
+    if not (v9 / 'boltz_cache').is_dir():
+        pytest.skip('v9 not set up')
+    assert any('aff' in c.name for c in (v9 / 'boltz_cache').glob('*.ckpt'))
+    assert verify_inputs(_campaign('v9-boltz-pbind.yaml'), v9) == []
