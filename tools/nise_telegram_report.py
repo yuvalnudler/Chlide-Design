@@ -407,20 +407,37 @@ def make_plots(run_dir: Path, hist: dict, sm_hist: dict, out_dir: Path) -> list:
         ax[0].set_title('Score: what NISE maximises  (best %.3f)' % smax[-1], fontsize=9.5)
         ax[0].legend(fontsize=7)
 
-        lpm = [pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce').median()
-               for i in pb_its if i in hist]
+        # Both terms, median AND best. The BEST is what decides whether 1.98 is reachable at
+        # all: if a term's ceiling sits well below 0.99, no amount of median improvement gets
+        # the score there. Same line convention as the left panel -- solid = best, faded
+        # dashed = median.
+        _lp = {i: pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce')
+               for i in pb_its if i in hist}
+        lp_its = sorted(_lp)
+        lpm = [_lp[i].median() for i in lp_its]
+        lpx = [_lp[i].max() for i in lp_its]
         pbm = [sm_hist[i]['affinity_probability_binary'].median() for i in pb_its]
-        ax[1].plot(pb_its[:len(lpm)], lpm, 'o-', color='#1baf7a', lw=1.8, ms=4,
-                   label='ligand pLDDT')
-        ax[1].plot(pb_its, pbm, 'o-', color='#8a5fd3', lw=1.8, ms=4, label='P(bind)')
+        pbx = [sm_hist[i]['affinity_probability_binary'].max() for i in pb_its]
+        ax[1].plot(lp_its, lpx, 'o-', color='#1baf7a', lw=1.8, ms=4, label='ligand pLDDT (best)')
+        ax[1].plot(lp_its, lpm, 'o--', color='#1baf7a', lw=1.2, ms=3, alpha=.55,
+                   label='ligand pLDDT (median)')
+        ax[1].plot(pb_its, pbx, 'o-', color='#8a5fd3', lw=1.8, ms=4, label='P(bind) (best)')
+        ax[1].plot(pb_its, pbm, 'o--', color='#8a5fd3', lw=1.2, ms=3, alpha=.55,
+                   label='P(bind) (median)')
         ax[1].axhline(0.99, color='crimson', ls=':', lw=1.2)
+        ax[1].annotate('0.99 needed in BOTH for score 1.98', (lp_its[0], 0.99), xytext=(2, -10),
+                       textcoords='offset points', color='crimson', fontsize=6.5)
         ax[1].set_ylim(0, 1.05)
         ax[1].set_xlabel('NISE iteration')
-        ax[1].set_ylabel('median')
-        # 1.98 needs BOTH terms near 0.99, so the lower line is the one holding the score back.
-        lim = 'P(bind)' if (pbm and lpm and pbm[-1] < lpm[-1]) else 'ligand pLDDT'
-        ax[1].set_title('Which term limits the score?  -> %s' % lim, fontsize=9.5)
-        ax[1].legend(fontsize=7)
+        ax[1].set_ylabel('ligand pLDDT  /  P(bind)')
+        # The limiter is whichever term's CEILING is furthest from 0.99 -- that is the one
+        # that makes 1.98 unreachable, not the one with the lower median.
+        gap_lp = 0.99 - (lpx[-1] if lpx else 0)
+        gap_pb = 0.99 - (pbx[-1] if pbx else 0)
+        lim = 'P(bind)' if gap_pb > gap_lp else 'ligand pLDDT'
+        ax[1].set_title('Limiting term: %s  (best gap to 0.99: pLDDT %+.2f, P(bind) %+.2f)'
+                        % (lim, -gap_lp, -gap_pb), fontsize=9)
+        ax[1].legend(fontsize=6.5, loc='lower right', ncol=2)
         for a in ax:
             a.grid(alpha=.3)
         p = out_dir / '7_score.png'
