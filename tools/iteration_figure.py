@@ -41,7 +41,9 @@ def load(run: Path, it: int) -> pd.DataFrame:
 
 
 def figure(d: pd.DataFrame, run: Path, it: int, out: Path) -> Path:
-    has_pbind = 'affinity_probability_binary' in d.columns and d['affinity_probability_binary'].notna().any()
+    has_pbind = ('affinity_probability_binary' in d.columns
+                 and pd.to_numeric(d['affinity_probability_binary'],
+                                   errors='coerce').notna().any())
     panels = 3 if has_pbind else 2
     fig, axes = plt.subplots(1, panels, figsize=(4.2 * panels, 3.6))
     axes = np.atleast_1d(axes)
@@ -131,3 +133,103 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
+
+# --------------------------------------------------------------------------- trajectory
+
+def load_all(run: Path) -> dict[int, pd.DataFrame]:
+    out = {}
+    d = run / 'input' / 'sampling_dataframes'
+    if d.is_dir():
+        for f in sorted(d.glob('iter_*_data.pkl')):
+            try:
+                out[int(f.stem.split('_')[1])] = pd.read_pickle(f)
+            except Exception:                               # noqa: BLE001
+                continue
+    return dict(sorted(out.items()))
+
+
+def trajectory(hist: dict[int, pd.DataFrame], run: Path, out: Path) -> Path | None:
+    """How the campaign is moving, not just where it is.
+
+    The point of the NISE loop is that each iteration should be better than the last. A single
+    iteration's histogram cannot show that; this can, and it is what tells you early whether a
+    trajectory is climbing, flat, or being driven by the P(bind) term alone.
+    """
+    if len(hist) < 2:
+        return None
+    its = sorted(hist)
+    p90 = [pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce').quantile(.9) for i in its]
+    med = [pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce').median() for i in its]
+    has_pb = all('affinity_probability_binary' in hist[i]
+                 and pd.to_numeric(hist[i]['affinity_probability_binary'],
+                                   errors='coerce').notna().any() for i in its)
+    pb = ([pd.to_numeric(hist[i]['affinity_probability_binary'], errors='coerce').median()
+           for i in its] if has_pb else None)
+    frac_s = [100 * (hist[i]['ligand_config'] == 'S').mean() if 'ligand_config' in hist[i]
+              else np.nan for i in its]
+    finite = [100 * np.isfinite(pd.to_numeric(hist[i]['ligand_rmsds'],
+                                              errors='coerce')).mean() for i in its]
+
+    n = 3 if has_pb else 2
+    fig, ax = plt.subplots(1, n, figsize=(4.4 * n, 3.6))
+    ax = np.atleast_1d(ax)
+
+    ax[0].plot(its, p90, 'o-', color=C1, lw=1.8, ms=4, label='p90')
+    ax[0].plot(its, med, 'o--', color=C1, lw=1.2, ms=3, alpha=.55, label='median')
+    ax[0].axhline(0.80, color=C2, lw=1.2, ls=':')
+    ax[0].set_xlabel('iteration')
+    ax[0].set_ylabel('ligand pLDDT')
+    ax[0].set_title(f'a  the objective  (p90 {p90[0]:.3f} -> {p90[-1]:.3f})',
+                    fontsize=9.5, loc='left')
+    ax[0].legend(frameon=False, fontsize=8)
+
+    ax[1].plot(its, frac_s, 'o-', color=C3, lw=1.8, ms=4, label='correct epimer (S)')
+    ax[1].plot(its, finite, 'o--', color=MUTED, lw=1.2, ms=3, label='self-consistent')
+    ax[1].set_ylim(0, 103)
+    ax[1].set_xlabel('iteration')
+    ax[1].set_ylabel('% of designs')
+    ax[1].set_title('b  gates', fontsize=9.5, loc='left')
+    ax[1].legend(frameon=False, fontsize=8, loc='lower right')
+
+    if has_pb:
+        ax[2].plot(its, pb, 'o-', color='#8a5fd3', lw=1.8, ms=4)
+        ax[2].set_xlabel('iteration')
+        ax[2].set_ylabel('median P(bind)')
+        ax[2].set_ylim(0, 1)
+        # NISE maximises ligand pLDDT + P(bind); if this line is flat the second term is
+        # contributing nothing and the campaign is effectively a plain ligand-pLDDT run.
+        delta = pb[-1] - pb[0]
+        ax[2].set_title(f'c  P(bind)  ({pb[0]:.3f} -> {pb[-1]:.3f}, {delta:+.3f})',
+                        fontsize=9.5, loc='left')
+
+    for a in ax:
+        a.grid(color=GRID, lw=.6)
+        a.set_axisbelow(True)
+    fig.suptitle(f'{run.name} - trajectory through iteration {its[-1]}', fontsize=11,
+                 x=.02, ha='left')
+    fig.tight_layout(rect=(0, 0, 1, .95))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, bbox_inches='tight')
+    plt.close(fig)
+    return out
+
+
+def trajectory_summary(hist: dict[int, pd.DataFrame], run: Path) -> str:
+    its = sorted(hist)
+    p90 = [pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce').quantile(.9) for i in its]
+    best = max(p90)
+    lines = [f'<b>{run.name} - trajectory through iteration {its[-1]}</b>',
+             f'{sum(len(hist[i]) for i in its):,} designs over {len(its)} iterations',
+             f'  ligand pLDDT p90: {p90[0]:.4f} -> <b>{p90[-1]:.4f}</b>  '
+             f'(best {best:.4f} at iter {its[p90.index(best)]})']
+    if all('affinity_probability_binary' in hist[i]
+           and pd.to_numeric(hist[i]['affinity_probability_binary'],
+                             errors='coerce').notna().any() for i in its):
+        pb = [pd.to_numeric(hist[i]['affinity_probability_binary'],
+                            errors='coerce').median() for i in its]
+        lines.append(f'  P(bind) median: {pb[0]:.3f} -> <b>{pb[-1]:.3f}</b> ({pb[-1]-pb[0]:+.3f})')
+    if 'ligand_config' in hist[its[-1]]:
+        s = 100 * (hist[its[-1]]['ligand_config'] == 'S').mean()
+        lines.append(f'  correct epimer at iter {its[-1]}: {s:.0f}%')
+    return '\n'.join(lines)
