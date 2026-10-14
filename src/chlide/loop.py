@@ -186,11 +186,6 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
 
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / 'logs').mkdir(exist_ok=True)
-    manifest = write_manifest(run_dir, cfg, params, campaign_file=campaign_file,
-                              extra={'run_id': run_id})
-    log.emit(event='run_start', campaign=cfg.name, engine=cfg.engine.fold,
-             objective=cfg.loop.objective, manifest=str(manifest))
-    print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
 
     # Boltz finds its checkpoints and its 45k-component farm through BOLTZ_CACHE. The old
     # launcher set it on the command line (`BOLTZ_CACHE=$RUN/boltz_cache nohup ...`); without
@@ -207,6 +202,15 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
     os.environ['CHLIDE_RUN_DIR'] = str(run_dir)
     os.environ['CHLIDE_FOLD_ENGINE'] = cfg.engine.fold
     os.environ['CHLIDE_CONSTRAIN_HIS_MG'] = '1' if cfg.engine.constrain_his_mg else '0'
+
+    # The manifest is written AFTER the environment is set, so it records BOLTZ_CACHE and
+    # can hash the Boltz checkpoints. Written the other way round it recorded an empty
+    # env_overrides and hashed nothing, which is a manifest that looks complete and is not.
+    manifest = write_manifest(run_dir, cfg, params, campaign_file=campaign_file,
+                              extra={'run_id': run_id})
+    log.emit(event='run_start', campaign=cfg.name, engine=cfg.engine.fold,
+             objective=cfg.loop.objective, manifest=str(manifest))
+    print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
 
     with GpuLock(list(cfg.engine.devices)):
         from chlide import nise_driver

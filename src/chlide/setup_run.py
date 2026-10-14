@@ -53,13 +53,24 @@ def seed_run(cfg: CampaignConfig, run: Path, seed_from: Path, *, link_cache: boo
             shutil.copy2(src, run / 'input' / name)
             report['copied'].append(f'input/{name}')
 
-    # the starting scaffold
-    sb = seed_from / 'input' / 'input_backbones'
-    if sb.is_dir():
-        (run / 'input' / 'input_backbones').mkdir(exist_ok=True)
-        for pdb in sb.glob('*.pdb'):
-            shutil.copy2(pdb, run / 'input' / 'input_backbones' / pdb.name)
-            report['copied'].append(f'input/input_backbones/{pdb.name}')
+    # The starting scaffold -- ONLY the one the config names. NISE raises
+    # "More than one input backbone not currently supported" if the directory holds two, and
+    # v7's holds a `_fixbeta` variant alongside the real one. Copying the whole directory put
+    # both there and the smoke test died on it. The config is the source of truth for which.
+    want = Path(cfg.scaffold.pdb).name
+    src = seed_from / cfg.scaffold.pdb
+    if not src.is_file():
+        cand = list((seed_from / 'input' / 'input_backbones').glob('*.pdb'))
+        raise SetupError(
+            f'{seed_from} has no {cfg.scaffold.pdb}. Backbones present: '
+            + (', '.join(c.name for c in cand) or 'none'))
+    dest_dir = run / Path(cfg.scaffold.pdb).parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest_dir / want)
+    report['copied'].append(str(cfg.scaffold.pdb))
+    others = [c.name for c in src.parent.glob('*.pdb') if c.name != want]
+    if others:
+        report['skipped_backbones'] = others
 
     # the Boltz cache: checkpoints and a 45k-file component farm. Symlink -- copying it is
     # ~10 GB of duplicate data and the checkpoints are already symlinks into the owner's home.
