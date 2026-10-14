@@ -10,12 +10,12 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 |---|---|
 | 0 bootstrap, pyproject, CI | done |
 | 1 `config.py` + campaign YAMLs | done — both proven equivalent to their drivers (19 params, 0 unexplained, `tools/config_equivalence.py`) |
-| **2 engines + stages + tools** | **tools DONE (24); engine adapters DONE; stages next** |
+| **2 engines + stages + tools** | **tools DONE (24); engines DONE; terminal stages DONE; loop + `chlide run` next** |
 | 3 provenance, logging, watchdog, GPU | not started |
 | 4 backbone generation (default-off) | not started |
 | 5 docs, golden tests, data migration | `CALIBRATION.md` and this file landed early |
 
-56 tests pass, no GPU needed. `pytest -q` is the gate.
+73 tests pass, no GPU needed. `pytest -q` is the gate.
 
 ## What is migrated
 
@@ -43,13 +43,22 @@ tree of symlinks into it, so `~/.boltz` is not a reliable fallback for every use
 
 ## Next, in order
 
-1. **The stage modules** — `src/chlide/stages/{ligand,design,fold,relax,cascade,score,report}.py`
-   wrapping the migrated tools, then `loop.py` from the drivers, then `chlide run`. This is the
-   remaining structural work; the tool migration is done.
+1. **`loop.py` and `chlide run`.** The terminal pipeline is encoded and tested
+   (`src/chlide/stages/`); what remains is the ITERATION loop from the drivers and a runner
+   that executes a stage list. Until `chlide run` exists, a real campaign is still launched
+   from `tools/finish_at_iter.sh` and a copied driver.
+
 2. **Phase 3** — provenance (`run_manifest.json` with git SHA + weights hashes), the JSONL event
    log, the resume watchdog, `gpu.py`.
 3. Move `make_report`/`sasa_rank`'s `CORE` and `PROPIONATE` atom sets into `LigandConfig`; they
    are ligand-specific and are module constants today.
+
+**The terminal stage order is now executable and tested.** `src/chlide/stages/terminal.py`
+declares what each stage reads and writes; `validate_order()` fails if a stage reads something
+only a LATER stage produces. That is the bug that made `af3_monomer` and `burial_rescore` crash
+on a first run and silently use stale files on a second. A test reproduces it. Another test
+asserts the encoded order is still a faithful transcription of `tools/finish_at_iter.sh`, which
+is what actually runs a campaign today.
 
 **Invariants to preserve while moving these** (each has already cost a bug):
 - `crossfold.py`'s join to the folded output is **positional** (`x{i}` ↔ CSV row *i*; the design

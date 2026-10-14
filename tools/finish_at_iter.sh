@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Stop the campaign cleanly at a chosen iteration, then run the whole terminal pipeline unattended.
+#
+# Ordering matters and is not arbitrary:
+#
+#   1. Wait for iteration N to write BOTH its artifacts. The driver's resume logic treats an
+#      iteration as complete only when sampled_backbones/iter_N/backbone_queue.txt AND
+#      sampling_dataframes/iter_N_data.pkl both exist, so stopping on that boundary means nothing
+#      is lost and the run can still be resumed to 25 later if you change your mind.
+#   2. Stop the DRIVER first, so it cannot start iteration N+1 while we work.
+#   3. Only then catch the relax pool up on iteration N -- it must not race the driver's own
+#      in-loop relax for the pool lock.
+#   4. The cascade is CPU-only. GPUs are free from step 2 onward; AF3 in step 6 is the only thing
+#      that needs them back.
+#
+# Usage: nohup bash tools/finish_at_iter.sh 16 > logs/finish.log 2>&1 &
+set -u
+RUN=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+DRIVER=$(cd "$RUN" && ls run_nise_*.py | head -1)   # derived: a literal here pkills the WRONG campaign
+PY=/home/yigall/mambaforge/envs/lasermpnn/bin/python
+RPY=/home/yigall/mambaforge/envs/Rosetta/bin/python
+STOP_AT=${1:?usage: finish_at_iter.sh <iteration>}
+RESERVE=${RESERVE:-16}   # cores always left free for other users on this shared box
+if [ -z "${WORKERS:-}" ]; then
+  # Size from OTHER users' load, not total: counting our own collapses this to the floor.
+  _others=$(ps -eo user,pcpu --no-headers | awk -v me="$USER" '$1!=me {s+=$2} END {printf "%d", s/100}')
+  _free=$(( $(nproc) - _others - RESERVE ))
+  WORKERS=$(( _free < 4 ? 4 : (_free > 48 ? 48 : _free) ))
+  echo "[cpu] $(nproc) cores, other users using ${_others}, reserving ${RESERVE}, taking ${WORKERS} workers"
+fi
+AF3_TOP=${AF3_TOP:-200}
+cd "$RUN" || exit 1
+say(){ printf '\n[%s] %s\n' "$(date +%F' '%H:%M:%S)" "$*"; }
+
+PKL="input/sampling_dataframes/iter_${STOP_AT}_data.pkl"
+QUE="input/sampled_backbones/iter_${STOP_AT}/backbone_queue.txt"
+
+say "waiting for iteration ${STOP_AT} to complete (both artifacts on disk)"
+while [ ! -f "$PKL" ] || [ ! -f "$QUE" ]; do
+  if ! pgrep -f "$DRIVER" >/dev/null; then
+    say "driver exited before iteration ${STOP_AT} finished -- continuing with what is on disk"
+    break
+  fi
+  sleep 60
+done
+say "iteration ${STOP_AT} banked ($(ls input/sampling_dataframes/iter_*_data.pkl | wc -l) complete)"
+
+# --- 2. stop the loop; GPUs are free from here -------------------------------------------------
+say "stopping driver and reporter"
+pkill -f "$DRIVER" 2>/dev/null
+# Scope every pkill to THIS run directory. A bare `pkill -f nise_telegram_report.py` matches
+# the reporter of any campaign on the box, and the Boltz line below would have killed v6b's
+# four folding processes outright.
+pkill -f "nise_telegram_report.py --run-dir $RUN" 2>/dev/null
+sleep 10
+pkill -f "run_alphafold_patched.py --input_dir=$RUN" 2>/dev/null   # AF3 stragglers, this run only
+sleep 5
+say "GPUs released: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader | tr '\n' ' ')"
+
+# --- 3. catch the relax pool up, then retire the watcher ---------------------------------------
+say "stopping the relax watcher, then catching the pool up on the final iteration"
+pkill -f "$RUN/tools/relax_watcher.sh" 2>/dev/null
+sleep 3
+while pgrep -f relax_pool.py >/dev/null; do sleep 20; done      # let any in-flight pass finish
+"$PY" tools/relax_pool.py --run-dir "$RUN" --workers "$WORKERS"
+say "relaxed pool: $(( $(wc -l < results/relaxed_pool/index.csv) - 1 )) designs"
+
+# --- 4. refresh the harvest so metrics.csv covers every iteration -------------------------------
+say "harvest"
+"$PY" tools/harvest_global_top.py --run-dir "$RUN" --top 50
+
+# --- 5. terminal cascade, CPU only --------------------------------------------------------------
+say "cascade (--pre-relaxed: holo minimisation already done during the run)"
+nice -n5 "$RPY" tools/polizzi_cascade.py --run-dir "$RUN" --from-metrics --pre-relaxed \
+     --workers "$WORKERS" || say "WARNING: cascade returned non-zero"
+
+# --- 6. AF3 aggregation proxy, the only GPU step ------------------------------------------------
+say "AF3 two-copy interface pAE, top ${AF3_TOP} by BUNs (GPU, ~1.2 h)"
+if [ "${NISE_ALLOW_GPU:-0}" != "1" ]; then
+  say "SKIPPING GPU stage -- trumpeldor is shared and NISE_ALLOW_GPU is not set"
+else
+  "$PY" tools/af3_interface_pae.py --run-dir "$RUN" --top "$AF3_TOP" --devices 0,1,2,3 \
+     || say "WARNING: AF3 stage returned non-zero"
+fi
+say "GPUs now free for good: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader | tr '\n' ' ')"
+
+# --- 7. scoring passes and the shortlist ---------------------------------------------------------
+# AF3 single-chain fold confidence -- the only independent check that the SEQUENCE encodes the
+# fold. Orthogonal to Boltz ligand pLDDT and to every Rosetta stage, and on v5 it disagreed
+# sharply with both: designs at Boltz 0.95+ came back as low as AF3 0.44. Must run before the
+# shortlist so the ranking can see it. This is the LAST GPU step.
+# ---- STAGE ORDER FIXED ------------------------------------------------------------------
+# af3_monomer.py reads results/final/top*.pdb and burial_rescore.py reads shortlist.csv --
+# BOTH are produced by final_shortlist.py. They used to run before it, so on a first run they
+# failed with "no top*.pdb ... run final_shortlist.py first" and FileNotFoundError. v5 only
+# worked because an earlier run had left those files on disk. Correct order: build the
+# shortlist, score it, then rebuild it so the AF3 and burial columns land in the ranking.
+say "final shortlist"
+"$PY" tools/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist returned non-zero"
+# ---- ENGINE-DEPENDENT fold check ---------------------------------------------------------
+# The two GPU scoring stages answer different questions and are NOT interchangeable:
+#   dimer  (af3_interface_pae.py)  ALWAYS AF3 -- it is an aggregation proxy, two copies of the
+#          design, and AF3 is the reference for that regardless of what folded the campaign.
+#   fold   engine-DEPENDENT. A campaign optimises its own folder's confidence, so that folder
+#          cannot also be the check. Boltz-led -> check with AF3. AF3-led -> check with Boltz.
+#          Running af3_monomer.py on an AF3 campaign grades the exam with the model that sat it.
+_ENGINE=$(grep -lq 'from af3_adapter import' "$RUN"/run_nise_*.py 2>/dev/null && echo AF3 || echo Boltz)
+say "fold check: campaign engine is ${_ENGINE}, cross-checking with the other model"
+if [ "$_ENGINE" = "AF3" ]; then
+  "$PY" tools/crossfold.py --run-dir "$RUN" --top 25 --mode complex --devices 0,1,2,3 \
+       || say "WARNING: Boltz cross-fold returned non-zero"
+else
+say "AF3 monomer fold confidence, top 25 (GPU, ~5 min)"
+if [ "${NISE_ALLOW_GPU:-0}" != "1" ]; then
+  say "SKIPPING GPU stage -- trumpeldor is shared and NISE_ALLOW_GPU is not set"
+else
+  "$PY" -u tools/af3_monomer.py --run-dir "$RUN" --top 25 --devices 0,1,2,3 \
+     || say "WARNING: AF3 monomer stage returned non-zero"
+fi
+fi
+
+say "strict burial rescore (alpha=9)"
+"$PY" tools/burial_rescore.py --run-dir "$RUN" || say "WARNING: burial rescore returned non-zero"
+say "rebuilding the shortlist so AF3-monomer and burial columns enter the ranking"
+"$PY" tools/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist rebuild returned non-zero"
+say "SASA ranking"
+"$PY" tools/sasa_rank.py --run-dir "$RUN" --top 25 || say "WARNING: sasa returned non-zero"
+
+# --- 8. figures and the final Telegram report -----------------------------------------------
+# Easy to forget, and the reporter is already dead by this point (step 2 kills it before any
+# result exists), so without this the campaign finishes silently and produces no plots.
+say "joined HTML report (all measures, sortable)"
+"$PY" tools/make_report.py --run-dir "$RUN" || say "WARNING: report returned non-zero"
+say "figures + final Telegram report"
+"$PY" tools/paper_figures.py --run-dir "$RUN" --telegram || say "WARNING: figures/telegram returned non-zero"
+
+# Report the TRUTH, not an aspiration. This line used to print the shortlist path
+# unconditionally; after the cascade was SIGKILLed at 2770/11201 it still said "DONE ...
+# shortlist.csv" and a Telegram went out from the figures stage (which runs regardless),
+# so the run looked finished when nothing downstream had produced a single row.
+if [ -s "$RUN/results/final/shortlist.csv" ]; then
+  say "DONE. shortlist: $RUN/results/final/shortlist.csv ($(( $(wc -l < "$RUN/results/final/shortlist.csv") - 1 )) designs)"
+else
+  say "INCOMPLETE -- no shortlist was produced. Check the WARNING lines above;"
+  say "  the cascade and the scoring passes must succeed before results/final/shortlist.csv exists."
+fi
+ls -1 results/final/*.csv results/final/sasa/*.csv 2>/dev/null | sed 's/^/  /'
