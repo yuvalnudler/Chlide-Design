@@ -125,3 +125,45 @@ def test_explicit_cache_wins():
     if not (V7_CACHE.is_dir() and any(V7_CACHE.glob('*.ckpt'))):
         pytest.skip('no Boltz cache available')
     assert resolve_cache(run=Path('/nonexistent'), explicit=str(V7_CACHE)) == V7_CACHE
+
+
+# ------------------------------------------------------------------ engine-aware artifacts
+
+def _final_shortlist():
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        'fs', str(Path(__file__).resolve().parents[1] / 'tools' / 'final_shortlist.py'))
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ['x']
+    try:
+        spec.loader.exec_module(mod)
+    except SystemExit:
+        pass
+    finally:
+        sys.argv = argv
+    return mod
+
+
+def test_shortlist_readme_names_the_right_engine():
+    """v8 shipped a README claiming patched-Boltz coordination while folding with AF3.
+
+    AF3 has no metal restraint at all; Rosetta relax alone closes the bond there
+    (4.22 -> 2.50 A). The text was hardcoded. Now it is derived.
+    """
+    fs = _final_shortlist()
+    v7, v8 = (Path(f'/home/data/yuvaln/nise_bdfp44_v{n}') for n in (7, 8))
+    if not v8.is_dir():
+        pytest.skip('campaigns not present')
+    assert fs.leading_engine(v8) == 'AF3'
+    assert fs.leading_engine(v7) == 'Boltz'
+    assert 'Rosetta relax only' in fs.coordination_source('AF3')
+    assert 'patched Boltz' not in fs.coordination_source('AF3')
+    assert 'patched Boltz' in fs.coordination_source('Boltz')
+
+
+def test_engine_detection_reads_the_driver_not_the_layout():
+    """af3_adapter.to_boltz_layout writes AF3 output into a boltz_results_* tree on purpose,
+    so the directory name is not evidence. Only the driver's import is."""
+    src = (Path(__file__).resolve().parents[1] / 'tools' / 'final_shortlist.py').read_text()
+    assert "'from af3_adapter import' in drv.read_text()" in src
