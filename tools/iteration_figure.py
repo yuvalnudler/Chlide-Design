@@ -101,10 +101,29 @@ def summary(d: pd.DataFrame, run: Path, it: int) -> str:
              f'  protein pLDDT median {pp.median():.4f}' if len(pp) else '',
              f'  self-consistent (finite RMSD): {fin}/{len(rm)}',
              f'  13-2 stereocentre: ' + ', '.join(f'{k}={v}' for k, v in cfg.items())]
-    if 'affinity_probability_binary' in d.columns and d['affinity_probability_binary'].notna().any():
-        pb = pd.to_numeric(d['affinity_probability_binary'], errors='coerce').dropna()
-        lines.append(f'  P(bind) median <b>{pb.median():.3f}</b>  '
-                     f'range {pb.min():.3f}-{pb.max():.3f}')
+    pbcol = pd.to_numeric(d.get('affinity_probability_binary'), errors='coerce') \
+        if 'affinity_probability_binary' in d.columns else None
+    if pbcol is not None and pbcol.notna().any():
+        pb = pbcol.dropna()
+        av = pd.to_numeric(d.get('affinity_pred_value'), errors='coerce').dropna()
+        spread = pb.max() - pb.min()
+        # The paper filtered designs at P(bind) > 0.5, tightening to 0.8 only when more than
+        # 3,000 passed. Reporting both tells you which cutoff this campaign can afford.
+        over5 = 100 * (pb > 0.5).mean()
+        over8 = 100 * (pb > 0.8).mean()
+        lines += ['',
+                  f'<b>P(bind)</b>  (Boltz-2 affinity head -- the v9 objective term)',
+                  f'  median <b>{pb.median():.3f}</b>   range {pb.min():.3f}-{pb.max():.3f}'
+                  f'   spread {spread:.3f}',
+                  f'  above the paper\'s 0.5 filter: <b>{over5:.0f}%</b>'
+                  f'   above 0.8: {over8:.0f}%']
+        if len(av):
+            # affinity_pred_value is log10(IC50) on a uM scale; more negative is tighter.
+            lines.append(f'  predicted affinity: median {av.median():+.2f} '
+                         f'log10(IC50/uM)  ~= {10 ** av.median() * 1000:.0f} nM')
+        if spread <= 0.15:
+            lines.append('  <b>WARNING: saturated</b> -- a P(bind) with no spread carries no '
+                         'gradient, so the objective term is contributing nothing.')
     return '\n'.join(x for x in lines if x)
 
 
@@ -228,7 +247,14 @@ def trajectory_summary(hist: dict[int, pd.DataFrame], run: Path) -> str:
                              errors='coerce').notna().any() for i in its):
         pb = [pd.to_numeric(hist[i]['affinity_probability_binary'],
                             errors='coerce').median() for i in its]
-        lines.append(f'  P(bind) median: {pb[0]:.3f} -> <b>{pb[-1]:.3f}</b> ({pb[-1]-pb[0]:+.3f})')
+        o5 = [100 * (pd.to_numeric(hist[i]['affinity_probability_binary'],
+                                   errors='coerce') > 0.5).mean() for i in its]
+        lines.append(f'  P(bind) median: {pb[0]:.3f} -> <b>{pb[-1]:.3f}</b> '
+                     f'({pb[-1] - pb[0]:+.3f})')
+        lines.append(f'  above 0.5 filter: {o5[0]:.0f}% -> <b>{o5[-1]:.0f}%</b>')
+        if abs(pb[-1] - pb[0]) < 0.02:
+            lines.append('  <b>P(bind) is flat</b> -- NISE maximises ligand pLDDT + P(bind); '
+                         'if this term does not move, v9 is a plain ligand-pLDDT run.')
     if 'ligand_config' in hist[its[-1]]:
         s = 100 * (hist[its[-1]]['ligand_config'] == 'S').mean()
         lines.append(f'  correct epimer at iter {its[-1]}: {s:.0f}%')
