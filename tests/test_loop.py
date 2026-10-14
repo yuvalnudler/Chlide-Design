@@ -279,6 +279,7 @@ def test_debug_is_actually_small(tmp_path):
     assert prod['num_iterations'] == 25 and prod['sequences_sampled_per_backbone'] == 500
     assert dbg['num_iterations'] == 2
     assert dbg['sequences_sampled_per_backbone'] == len(cfg.engine.devices)
-    designs = dbg['num_iterations'] * dbg['sequences_sampled_per_backbone'] * dbg['num_top_backbones_per_round']
+    designs = (dbg['num_iterations'] * dbg['sequences_sampled_per_backbone']
+               * dbg['num_top_backbones_per_round'])
     assert designs <= 50, f'a smoke test that folds {designs} designs is not a smoke test'
     assert dbg['debug'] is True

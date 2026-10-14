@@ -192,7 +192,18 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
              objective=cfg.loop.objective, manifest=str(manifest))
     print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
 
-    # The driver reads these two at import time; they are the whole engine switch.
+    # Boltz finds its checkpoints and its 45k-component farm through BOLTZ_CACHE. The old
+    # launcher set it on the command line (`BOLTZ_CACHE=$RUN/boltz_cache nohup ...`); without
+    # it Boltz falls back to ~/.boltz, which does not exist for this user, and tries to
+    # DOWNLOAD the models mid-run.
+    if cfg.engine.fold == 'boltz' or cfg.engine.resolved_cross_check == 'boltz':
+        cache = run_dir / 'boltz_cache'
+        if not any(cache.glob('*.ckpt')):
+            raise RuntimeError(
+                f'{cache} has no checkpoints. Run `chlide setup --seed-from <campaign>` first.')
+        os.environ['BOLTZ_CACHE'] = str(cache)
+
+    # The driver reads these at import time; they are the whole engine switch.
     os.environ['CHLIDE_RUN_DIR'] = str(run_dir)
     os.environ['CHLIDE_FOLD_ENGINE'] = cfg.engine.fold
     os.environ['CHLIDE_CONSTRAIN_HIS_MG'] = '1' if cfg.engine.constrain_his_mg else '0'
