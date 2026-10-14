@@ -283,3 +283,37 @@ def test_debug_is_actually_small(tmp_path):
                * dbg['num_top_backbones_per_round'])
     assert designs <= 50, f'a smoke test that folds {designs} designs is not a smoke test'
     assert dbg['debug'] is True
+
+
+def test_v9_runs_past_the_plateau():
+    """The published protocol: 35 iterations, and do NOT stop at the plateau.
+
+    "performing NISE iterations beyond the plateau in ligand pLDDT or score was important for
+    downstream filtering... both EPIC and APEX came from later iterations" (Nature 656, 237).
+    """
+    v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
+    assert v9.loop.iterations == 35
+    assert v9.loop.convergence.enabled is False
+    assert v9.loop.per_backbone == 500      # paper: 1,500/iteration, 500 for the first round
+    assert v9.loop.per_iteration == 1500
+
+
+def test_matched_prefix_keeps_pbind_attributable():
+    """v9 changes two things, so any claim about P(bind) must be made on the matched prefix.
+    v7 ran 14 iterations; v9's first 14 are identical to v7 except for the objective."""
+    v7 = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
+    v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
+    for field in ('ligand', 'scaffold', 'gates', 'stages', 'compute', 'engine'):
+        assert getattr(v7, field) == getattr(v9, field), f'{field} drifted'
+    assert (v7.loop.per_backbone, v7.loop.top_backbones) == \
+           (v9.loop.per_backbone, v9.loop.top_backbones)
+    assert v9.loop.iterations > v7.loop.iterations
+
+
+def test_autostop_flag_reaches_the_driver():
+    src = (ROOT / 'src' / 'chlide' / 'loop.py').read_text()
+    assert "CHLIDE_CONVERGENCE_AUTOSTOP" in src
+    drv = (ROOT / 'src' / 'chlide' / 'nise_driver.py').read_text()
+    assert "CONVERGENCE_AUTOSTOP = os.environ.get('CHLIDE_CONVERGENCE_AUTOSTOP', '1') == '1'" in drv
+    # the metric must still be computed when the halt is suppressed
+    assert 'return False, cs' in drv

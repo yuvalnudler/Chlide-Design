@@ -160,6 +160,12 @@ class EngineConfig(_Base):
 
 
 class ConvergenceConfig(_Base):
+    # The auto-stop is a CONVENIENCE, not a correctness feature. The published protocol says
+    # to keep going past the plateau -- "both EPIC and APEX came from later iterations"
+    # (Nature 656, 237, 2026) -- and v8 agreed: it halted itself at iteration 16 of 25 while
+    # half its top-10 by BUNs came from iteration 11 or later. With this False the metric is
+    # still computed, logged and plotted; only the halt is suppressed.
+    enabled: bool = True
     window: int = Field(default=3, ge=1)
     eps: float = Field(default=0.002, gt=0)
     patience: int = Field(default=7, ge=1)

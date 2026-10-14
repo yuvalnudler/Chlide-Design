@@ -14,9 +14,14 @@
 #
 # WHY BOLTZ AND NOT AF3. P(bind) is a Boltz-2 head; AF3 has no equivalent. v8
 # (AF3-led) is our best campaign, but comparing Boltz+P(bind) against it would
-# confound the engine with the objective. v9 is therefore v7 + P(bind) and
-# NOTHING else, so v7 vs v9 isolates P(bind) exactly as v5/v6b/v7 isolated
-# deprotonation.
+# confound the engine with the objective. v9 is therefore Boltz-led like v7.
+#
+# TWO VARIABLES, DELIBERATELY. v9 changes the objective AND removes the auto-stop,
+# both on the paper's evidence. Attribution is still recoverable: v7 ran 14
+# iterations, so comparing v9's iterations 0-13 against v7's 0-13 is a matched-length,
+# single-variable comparison of P(bind). Iterations 14-34 are an additional layer on
+# top of that, not a confound -- as long as any claim about P(bind) is made on the
+# matched prefix and any claim about length is made against v9's own trajectory.
 #
 # WHAT WE DO NOT KNOW. Boltz-2's affinity head was trained on drug-like
 # protein-ligand complexes. Exatecan and apixaban are in distribution; a
@@ -38,7 +43,20 @@ engine:
   devices: [cuda:0, cuda:1, cuda:2, cuda:3]
 
 loop:
-  # THE ONLY LINE THAT DIFFERS FROM v7.
+  # 35 iterations, the published EPIC protocol: "The NISE protocol was run for 35 iterations,
+  # at which point the ligand pLDDT had converged" (SI). v7 ran 14 and v8 17, both halted by
+  # our own auto-stop.
+  iterations: 35
+
+  convergence:
+    # OFF. "Performing NISE iterations beyond the plateau in ligand pLDDT or score was
+    # important for downstream filtering by additional biophysical metrics. Indeed, both EPIC
+    # and APEX came from later iterations." (Nature 656, 237, 2026.) v8 stopped itself at
+    # iteration 16 of 25 while half its top-10 by BUNs came from iteration 11 or later.
+    # The metric is still computed, logged and plotted -- only the halt is suppressed.
+    enabled: false
+
+  # THE OBJECTIVE CHANGE.
   # NISE sums them unweighted: design_ligand_plddt + affinity_probability_binary,
   # both on 0-1, matching the paper's "sum of Ligand pLDDT and predicted_affinity_binary".
   # Setting this also flips boltz2_predict_affinity on, which makes the driver emit

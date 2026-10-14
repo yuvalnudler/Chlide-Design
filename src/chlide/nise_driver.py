@@ -367,7 +367,7 @@ class DesignCampaign:
         self.already_converged = False
         if self.start_iteration > 0:
             cs = self.convergence_state(self.start_iteration - 1)
-            if cs['stop']:
+            if cs['stop'] and self.CONVERGENCE_AUTOSTOP:
                 self.already_converged = True
                 print(f'CONVERGED BEFORE RESTART: {cs["reason"]}\n'
                       f'  best {cs["best"]:.4f} at iteration {cs["best_iteration"]}; '
@@ -697,6 +697,16 @@ class DesignCampaign:
     # it fails loudly if a constant would have stopped any campaign before its peak.
     CONVERGENCE = dict(window=3, eps=0.002, patience=7, min_iterations=10)
 
+    # The published protocol says to keep going PAST the plateau: "performing NISE iterations
+    # beyond the plateau in ligand pLDDT or score was important for downstream filtering by
+    # additional biophysical metrics. Indeed, both EPIC and APEX came from later iterations."
+    # (Nature 656, 237, 2026.) Our own v8 agrees -- it stopped itself at iteration 16 of 25 and
+    # half its top-10 by BUNs came from iteration 11 or later.
+    #
+    # So the auto-stop is a CONVENIENCE, not a correctness feature. With it off the metric is
+    # still computed, logged and reported; only the halt is suppressed.
+    CONVERGENCE_AUTOSTOP = os.environ.get('CHLIDE_CONVERGENCE_AUTOSTOP', '1') == '1'
+
     # The 13-2 centre must be S -- verified against PDB 5HPZ (13'2-hydroxy-chlorophyll a, the
     # structure that defines CCD code 68G; both independent copies are S). Note that yigall's
     # AMBER parameterisation of the same pigment (4D2/oxy/.../68G.mol2, MCPB/6G1.mol2) is R and
@@ -780,6 +790,12 @@ class DesignCampaign:
                                        'timestamp': time.time()}, indent=1, default=str))
         except Exception as e:  # noqa: BLE001
             print(f'CONVERGENCE: could not write convergence.json: {e}')
+        if cs['stop'] and not self.CONVERGENCE_AUTOSTOP:
+            # Report it, do not act on it. The number still goes into convergence.json and the
+            # log, so the plateau is visible in the trajectory plots either way.
+            print('CONVERGENCE: plateau reached but auto-stop is OFF -- continuing, because '
+                  'later iterations are where BUNs is refined (Nature 656, 237).')
+            return False, cs
         return cs['stop'], cs
 
     def log(self, use_wandb: bool, dataframe: pd.DataFrame):

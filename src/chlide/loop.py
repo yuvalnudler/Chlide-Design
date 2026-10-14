@@ -202,6 +202,7 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
     os.environ['CHLIDE_RUN_DIR'] = str(run_dir)
     os.environ['CHLIDE_FOLD_ENGINE'] = cfg.engine.fold
     os.environ['CHLIDE_CONSTRAIN_HIS_MG'] = '1' if cfg.engine.constrain_his_mg else '0'
+    os.environ['CHLIDE_CONVERGENCE_AUTOSTOP'] = '1' if cfg.loop.convergence.enabled else '0'
 
     # The manifest is written AFTER the environment is set, so it records BOLTZ_CACHE and
     # can hash the Boltz checkpoints. Written the other way round it recorded an empty
