@@ -99,7 +99,7 @@ def yaml_for(seq: str, ccd: str, his: int, with_ligand: bool) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--top', type=int, default=25)
     ap.add_argument('--mode', choices=('monomer', 'complex'), default='complex')
     ap.add_argument('--devices', default='0,1,2,3')

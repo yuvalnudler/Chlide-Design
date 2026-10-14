@@ -314,7 +314,7 @@ def _self_test(a) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--ccd', default='CLAOX')
     ap.add_argument('--devices', default='0,1,2,3')
     ap.add_argument('--self-test', action='store_true')

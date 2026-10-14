@@ -51,7 +51,7 @@ def plddt(pdb: Path) -> tuple[float, float] | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--source', type=Path,
                     default=Path(os.environ.get(
                         'BOLTZ_REFERENCE_DF',

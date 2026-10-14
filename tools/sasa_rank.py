@@ -24,6 +24,7 @@ Usage: python tools/sasa_rank.py [--run-dir <run>] [--top 25]
 """
 from __future__ import annotations
 
+import os
 import argparse
 import csv
 import shutil
@@ -124,7 +125,7 @@ def score(pdb: Path) -> dict | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--top', type=int, default=25)
     a = ap.parse_args()
 

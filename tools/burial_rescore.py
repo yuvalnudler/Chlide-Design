@@ -71,7 +71,7 @@ def score(pdb: Path) -> dict | None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--run-dir', type=Path,
-                    default=Path(__file__).resolve().parent.parent,
+                    default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent),
                     help='defaults to THIS campaign, not a hardcoded other one')
     a = ap.parse_args()
     R = a.run_dir

@@ -19,6 +19,7 @@ Usage: python tools/make_report.py --run-dir <run>   ->  results/figures/report.
 """
 from __future__ import annotations
 
+import os
 import argparse
 import html
 import json
@@ -232,7 +233,7 @@ def funnel(run: Path) -> list[tuple[str, int]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--out', type=Path, default=None)
     a = ap.parse_args()
     run = a.run_dir.resolve()   # `--run-dir .` must still name the campaign, not ''

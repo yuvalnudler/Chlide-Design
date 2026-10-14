@@ -39,6 +39,7 @@ structure that defines CCD code 68G; both independent copies are S).
 """
 from __future__ import annotations
 
+import os
 import pickle
 import warnings
 from pathlib import Path
@@ -99,7 +100,14 @@ def ligand_config(atoms: pr.AtomGroup, smiles: str | None = None,
         # of, so a hard default of boltz_cache/mols/ would return None for every design -- and
         # None is a gate FAILURE, which would empty the backbone queue every iteration and
         # freeze the campaign for a reason that has nothing to do with chemistry.
-        here = Path(__file__).resolve().parent.parent
+        # The RUN directory, not this file's location. These tools used to live INSIDE the
+        # campaign, so __file__.parent.parent was the run; now they live in the repo and that
+        # guess resolves to the repo root, which has no boltz_cache/ and no input/ -- so this
+        # returned None for every design, and None is a gate FAILURE. Every ligand_rmsd became
+        # inf, which in production empties the backbone queue at iteration 0 and freezes the
+        # campaign: the v4 funnel collapse, from a path bug rather than from chemistry.
+        here = Path(os.environ.get('CHLIDE_RUN_DIR')
+                    or Path(__file__).resolve().parent.parent)
         for cand in (here / 'boltz_cache' / 'mols' / f'{DEFAULT_CCD}.pkl',
                      here / 'input' / f'{DEFAULT_CCD}.pkl'):
             if cand.is_file():

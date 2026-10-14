@@ -260,3 +260,76 @@ def test_derived_fixbeta_backbones_are_not_counted_as_inputs(tmp_path):
     (tmp_path / 'notes.txt').write_text('x')
     got = [p.name for p in mod._input_backbones(tmp_path)]
     assert got == ['scaffold.pdb'], got
+
+
+# ------------------------------------------------------------------ run-dir resolution
+
+V9_SMOKE = Path('/home/data/yuvaln/v9_smoke')
+
+
+def test_ligand_config_finds_the_component_via_the_run_directory():
+    """ligand_config is IMPORTED by the driver, so there is no --run-dir to correct its guess.
+
+    It used to derive the run directory from its own __file__, which worked while tools lived
+    INSIDE the campaign. Now they live in the repo, so that guess resolved to the repo root --
+    no boltz_cache/, no input/ -- and it returned None for every design. None is a gate
+    FAILURE, so every ligand_rmsd became inf; in production that empties the backbone queue at
+    iteration 0 and freezes the campaign. The v4 funnel collapse, caused by a path.
+    """
+    import os
+    import sys
+    if not (V9_SMOKE / 'boltz_cache' / 'mols' / 'CLAOX.pkl').is_file():
+        pytest.skip('no seeded run directory available')
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+    import warnings
+    warnings.filterwarnings('ignore')
+    import prody as pr
+    pr.confProDy(verbosity='none')
+    from ligand_chirality import ligand_config
+
+    preds = sorted((V9_SMOKE / 'input' / 'sampled_backbones' / 'iter_0').glob(
+        'boltz_results_boltz_inputs/predictions/*/*_model_0.pdb'))
+    if not preds:
+        pytest.skip('no predictions in the smoke run')
+
+    old = os.environ.get('CHLIDE_RUN_DIR')
+    try:
+        os.environ['CHLIDE_RUN_DIR'] = str(V9_SMOKE)
+        got = [ligand_config(pr.parsePDB(str(p))) for p in preds[:3]]
+        assert all(g == 'S' for g in got), got
+
+        # and with the run directory pointing nowhere it must return None -- a failure to
+        # verify, never a silent pass
+        os.environ['CHLIDE_RUN_DIR'] = '/nonexistent-run-dir'
+        assert ligand_config(pr.parsePDB(str(preds[0]))) is None
+    finally:
+        if old is None:
+            os.environ.pop('CHLIDE_RUN_DIR', None)
+        else:
+            os.environ['CHLIDE_RUN_DIR'] = old
+
+
+def test_no_tool_silently_guesses_the_run_directory():
+    """Every __file__-derived run directory must defer to $CHLIDE_RUN_DIR.
+
+    Ten tools used it only as an argparse default, which the runner always overrides -- latent
+    rather than live. ligand_chirality used it at call time with no override, which is what
+    broke. Fixing only the live one would leave the same trap for the next tool imported as a
+    library.
+    """
+    import re
+    bad = []
+    for f in sorted((Path(__file__).resolve().parents[1] / 'tools').glob('*.py')):
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if 'Path(__file__).resolve().parent.parent' in line and 'CHLIDE_RUN_DIR' not in line:
+                # the fix spans two lines in ligand_chirality; check the previous line too
+                bad.append(f'{f.name}:{i}')
+    # allow a match whose CHLIDE_RUN_DIR guard is on the preceding line
+    real = []
+    for loc in bad:
+        name, ln = loc.split(':')
+        lines = (Path(__file__).resolve().parents[1] / 'tools' / name).read_text().splitlines()
+        ctx = ' '.join(lines[max(0, int(ln) - 2):int(ln)])
+        if 'CHLIDE_RUN_DIR' not in ctx:
+            real.append(loc)
+    assert not real, f'tools guessing the run directory without $CHLIDE_RUN_DIR: {real}'

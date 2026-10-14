@@ -144,7 +144,7 @@ def acquire(lock: Path) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--iteration', type=int, default=None)
     ap.add_argument('--all', action='store_true', help='re-relax even cached designs')
     ap.add_argument('--workers', type=int, default=16)

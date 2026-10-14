@@ -127,7 +127,7 @@ def geometry(pdb_path: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--out', type=Path, default=None, help='default: <run-dir>/results/global_top')
     ap.add_argument('--top', type=int, default=50, help='structures to copy (default 50)')
     a = ap.parse_args()

@@ -82,7 +82,7 @@ def report(name: str, df: pd.DataFrame) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--run-dir', type=Path, default=Path(__file__).resolve().parent.parent)
+    ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--upto', type=int, default=None, help='only iterations <= this')
     ap.add_argument('--compare', type=Path,
                     default=Path(os.environ.get('COMPARE_CAMPAIGN',
