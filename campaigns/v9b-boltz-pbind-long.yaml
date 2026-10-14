@@ -1,0 +1,43 @@
+# v9b -- v9 run PAST the plateau. The second single-variable test.
+#
+# v9 answers "does P(bind) help?" by changing only the objective against v7.
+# v9b answers "does iterating past the plateau help?" by changing only the
+# iteration budget and the auto-stop against v9. Neither confounds the other.
+#
+# THE EVIDENCE. Nature 656, 237 (2026), main text: "performing NISE iterations
+# beyond the plateau in ligand pLDDT or score was important for downstream
+# filtering by additional biophysical metrics. Indeed, both EPIC and APEX came
+# from later iterations." And: "subtle refinements in later rounds were important
+# for minimizing the number of buried, non-hydrogen-bonded polar atoms" -- BUNs
+# being the measure we actually select on.
+#
+# OUR OWN DATA SAYS THE SAME. v8 halted itself on convergence at iteration 16 of a
+# 25-iteration budget, leaving 8 unspent. Yet half of its top-10 by BUNs came from
+# iteration 11 or later, two of the 8 ordered designs came from iteration 15, and
+# 48 of 142 shortlisted designs came from iterations 10+. The convergence rule
+# watches p90 ligand pLDDT; BUNs is what selects. They plateau at different times.
+#
+# 35 iterations is the published EPIC protocol: "The NISE protocol was run for 35
+# iterations, at which point the ligand pLDDT had converged" (SI).
+#
+# COST. ~2.6 h/iteration measured on v7 with these four cards, so 35 iterations is
+# roughly 3.5-4 days of wall clock. Run it only after v9 has reported.
+name: v9b-boltz-pbind-long
+description: >
+  v9 with the convergence auto-stop disabled and the budget raised to the paper's
+  35 iterations. Identical to v9 in ligand, scaffold, engine, gates, sampling and
+  objective, so v9 vs v9b isolates the effect of iterating past the plateau.
+
+engine:
+  fold: boltz
+  cross_check: auto          # -> af3
+  constrain_his_mg: true
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+loop:
+  objective: ligand_plddt_and_pbind    # same as v9
+  iterations: 35                       # v9 has 25
+  convergence:
+    # The metric is still computed, logged to convergence.json and plotted. Only the
+    # HALT is suppressed, and the driver prints why it is continuing.
+    enabled: false

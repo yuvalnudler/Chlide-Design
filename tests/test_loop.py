@@ -231,12 +231,10 @@ def test_resolver_returns_none_rather_than_a_path_that_does_not_exist(tmp_path):
 
 # ------------------------------------------------------------------ v9 / P(bind)
 
-def test_v9_differs_from_v7_in_the_objective_and_the_budget(tmp_path):
-    """v9 deliberately changes TWO things: the objective and the iteration budget.
+def test_v9_differs_from_v7_only_in_the_objective(tmp_path):
+    """v9 is the single-variable P(bind) test: v7 with the objective changed and nothing else.
 
-    Everything else must still match v7, because the matched prefix (v9 iterations 0-13 against
-    v7's 0-13) is what keeps P(bind) attributable. A drift in the ligand, scaffold, gates or
-    engine would destroy that.
+    Running past the plateau is a SEPARATE experiment (v9b), so the two never confound.
     """
     v7 = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
     v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
@@ -245,11 +243,10 @@ def test_v9_differs_from_v7_in_the_objective_and_the_budget(tmp_path):
     assert v7.engine == v9.engine, 'v9 must use the same engine configuration as v7'
     assert v7.loop.objective == 'ligand_plddt'
     assert v9.loop.objective == 'ligand_plddt_and_pbind'
-    # the SAMPLING is identical; only the budget and the auto-stop differ
-    assert (v7.loop.per_backbone, v7.loop.top_backbones) == \
-           (v9.loop.per_backbone, v9.loop.top_backbones)
-    assert v9.loop.iterations > v7.loop.iterations        # runs past the plateau
-    assert v7.loop.convergence.enabled and not v9.loop.convergence.enabled
+    # everything else about the loop is identical, including the auto-stop
+    assert (v7.loop.iterations, v7.loop.per_backbone, v7.loop.top_backbones) == \
+           (v9.loop.iterations, v9.loop.per_backbone, v9.loop.top_backbones)
+    assert v7.loop.convergence == v9.loop.convergence
 
 
 def test_pbind_objective_turns_boltz_affinity_on(tmp_path):
@@ -260,8 +257,8 @@ def test_pbind_objective_turns_boltz_affinity_on(tmp_path):
     assert v9['boltz2_predict_affinity'] is True
     assert v7['boltz2_predict_affinity'] is False
     diff = {k for k in v9 if v9[k] != v7[k]}
-    assert diff == {'objective_function', 'boltz2_predict_affinity', 'num_iterations'}, (
-        f'v9 should differ from v7 in exactly those params, got {diff}')
+    assert diff == {'objective_function', 'boltz2_predict_affinity'}, (
+        f'v9 should differ from v7 in exactly those two params, got {diff}')
 
 
 def test_pbind_requires_boltz():
@@ -293,29 +290,37 @@ def test_debug_is_actually_small(tmp_path):
     assert dbg['debug'] is True
 
 
-def test_v9_runs_past_the_plateau():
+def test_v9b_runs_past_the_plateau():
     """The published protocol: 35 iterations, and do NOT stop at the plateau.
 
     "performing NISE iterations beyond the plateau in ligand pLDDT or score was important for
     downstream filtering... both EPIC and APEX came from later iterations" (Nature 656, 237).
     """
-    v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
-    assert v9.loop.iterations == 35
-    assert v9.loop.convergence.enabled is False
-    assert v9.loop.per_backbone == 500      # paper: 1,500/iteration, 500 for the first round
-    assert v9.loop.per_iteration == 1500
+    v9b = load_campaign(CAMPAIGNS / 'v9b-boltz-pbind-long.yaml')
+    assert v9b.loop.iterations == 35
+    assert v9b.loop.convergence.enabled is False
+    assert v9b.loop.per_backbone == 500     # paper: 1,500/iteration, 500 for the first round
+    assert v9b.loop.per_iteration == 1500
 
 
-def test_matched_prefix_keeps_pbind_attributable():
-    """v9 changes two things, so any claim about P(bind) must be made on the matched prefix.
-    v7 ran 14 iterations; v9's first 14 are identical to v7 except for the objective."""
-    v7 = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
+def test_v9b_differs_from_v9_only_in_the_length(tmp_path):
+    """The second single-variable test. v7->v9 isolates P(bind); v9->v9b isolates length.
+
+    If anything else drifts, neither comparison means what it claims.
+    """
     v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
+    v9b = load_campaign(CAMPAIGNS / 'v9b-boltz-pbind-long.yaml')
     for field in ('ligand', 'scaffold', 'gates', 'stages', 'compute', 'engine'):
-        assert getattr(v7, field) == getattr(v9, field), f'{field} drifted'
-    assert (v7.loop.per_backbone, v7.loop.top_backbones) == \
-           (v9.loop.per_backbone, v9.loop.top_backbones)
-    assert v9.loop.iterations > v7.loop.iterations
+        assert getattr(v9, field) == getattr(v9b, field), f'{field} drifted'
+    assert v9.loop.objective == v9b.loop.objective == 'ligand_plddt_and_pbind'
+    assert (v9.loop.per_backbone, v9.loop.top_backbones) == \
+           (v9b.loop.per_backbone, v9b.loop.top_backbones)
+    assert (v9.loop.iterations, v9b.loop.iterations) == (25, 35)
+    assert v9.loop.convergence.enabled and not v9b.loop.convergence.enabled
+    # in the resolved params the only difference is the budget; the auto-stop travels by env
+    diff = {k for k in nise_params(v9, tmp_path)
+            if nise_params(v9, tmp_path)[k] != nise_params(v9b, tmp_path)[k]}
+    assert diff == {'num_iterations'}, diff
 
 
 def test_autostop_flag_reaches_the_driver():
