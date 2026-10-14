@@ -1,7 +1,8 @@
 # The published paper vs our pipeline
 
-Fry, Slaw & Polizzi, **Nature** (2026), doi:10.1038/s41586-026-10670-w — the peer-reviewed
-version of the bioRxiv preprint our pipeline was modelled on. Read alongside
+Fry, Slaw & Polizzi, **Nature vol 656, 6 Aug 2026, p. 237**, doi:10.1038/s41586-026-10670-w —
+the peer-reviewed version of the bioRxiv preprint our pipeline was modelled on.
+Main text: `/home/data/yuvaln/Nature_pollizi-zeroshot.pdf`. Read alongside
 `41586_2026_10670_MOESM1_ESM.pdf` (Supplementary Information, 99 pp) and
 `MOESM3` (Peer Review File, 35 pp), both in `/home/data/yuvaln/`.
 
@@ -37,7 +38,9 @@ The justification is orthogonality, and it is measured:
 - ligand pLDDT **is** correlated with ipAE and ipTM (Extended Data Fig. 8) — so those add nothing
 - P(bind) is **uncorrelated** with ligand pLDDT — so it does
 - high P(bind) → better Rosetta **shape complementarity** (Mann-Whitney p < 1e-12) and lower
-  **void volume** (p = 0.022), with **no** difference in ligand SASA (p = 0.724)
+  **void volume** (p = 0.022), with **no** difference in ligand SASA (p = 0.724). The main
+  text is more measured than the SI statistics suggest: "Adding P(bind) from Boltz-2
+  increased shape complementarity **moderately**." Calibrate expectations to that word.
 - P(bind) discerns binders from non-binders but **not** stronger from weaker
 
 **For us this is the single most actionable finding.** Shape complementarity and core void
@@ -61,6 +64,41 @@ it. Using it means a Boltz-led trajectory (v7's configuration) or a hybrid.
 
 NISE supports it directly: `objective_function` accepts `ligand_plddt_and_pbind`, which flips
 `boltz2_predict_affinity` on. In our config that is **one line**: `loop.objective`.
+
+## 2b. Iterate PAST the plateau — which our convergence rule does not
+
+From the main text:
+
+> "We found that performing **NISE iterations beyond the plateau in ligand pLDDT or score was
+> important** for downstream filtering by additional biophysical metrics. Indeed, **both EPIC
+> and APEX came from later iterations**."
+
+> "The most marked changes in the sequence and structure occurred at early iterations of NISE;
+> **subtle refinements in later rounds were important for minimizing the number of buried,
+> non-hydrogen-bonded polar atoms**."
+
+That is the opposite of what our auto-stop does. Our rule halts when p90 ligand pLDDT plateaus
+(3-iteration mean, eps 0.002, patience 7, min_iterations 10) — i.e. precisely at the point the
+paper says to keep going, because the metric being watched stops improving while the metric we
+actually *select on* (BUNs) is still being refined.
+
+**Our own data agrees with them.** v8 stopped on convergence at iteration 16 of a 25-iteration
+budget, leaving 8 unspent. Yet:
+
+| | |
+|---|---|
+| top-10 shortlist by BUNs, source iterations | 5, 7, 7, 9, **11, 12, 12, 13, 15, 15** — half from iteration ≥ 11 |
+| ordered 8, source iterations | 5, 7, 7, 9, 12, 13, **15, 15** |
+| shortlisted designs from iterations ≥ 10 | 48 of 142 |
+
+Late iterations were productive right up to the point the run stopped itself. The convergence
+rule is watching ligand pLDDT; BUNs is what selects. They plateau at different times.
+
+**Open decision.** Relaxing or disabling the auto-stop is the single highest-value configuration
+change available, but it is a SECOND variable. v9 is a single-variable P(bind) test against v7,
+and both use the same convergence rule, so the comparison stays fair either way. Changing it
+belongs in v10, or in a deliberate two-variable v9 if the extra iterations are judged cheap
+enough. Recorded here rather than acted on.
 
 ## 3. The funnel is much stricter than ours
 
