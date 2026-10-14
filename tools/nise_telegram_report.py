@@ -297,7 +297,13 @@ def make_plots(run_dir: Path, hist: dict, sm_hist: dict, out_dir: Path) -> list:
     ax.plot(its, series('protein_plddts', np.median), 's-', label='protein pLDDT (median)', alpha=.7)
     ax.axhline(PAPER['ligand_plddt'], color='crimson', ls=':', label='paper 0.8')
     ax.set_xlabel('NISE iteration'); ax.set_ylabel('pLDDT'); ax.set_ylim(0, 1)
-    ax.set_title('Objective trajectory'); ax.legend(fontsize=7); ax.grid(alpha=.3)
+    # For a ligand_plddt campaign this IS the objective. For ligand_plddt_and_pbind it is
+    # only half of it -- the score lives in figure 7 -- so do not call it the objective here.
+    _has_pb = any('affinity_probability_binary' in v and v['affinity_probability_binary'].notna().any()
+                  for v in sm_hist.values())
+    ax.set_title('Confidence trajectory (objective: score, see fig 7)' if _has_pb
+                 else 'Objective trajectory')
+    ax.legend(fontsize=7); ax.grid(alpha=.3)
     p = out_dir / '1_objective.png'; fig.tight_layout(); fig.savefig(p); plt.close(fig); paths.append(p)
 
     # 2. self-consistency RMSD trajectory
@@ -372,35 +378,52 @@ def make_plots(run_dir: Path, hist: dict, sm_hist: dict, out_dir: Path) -> list:
             plt.setp(ax.get_xticklabels(), rotation=20, fontsize=7)
             p = out_dir / '6_confidence.png'; fig.tight_layout(); fig.savefig(p); plt.close(fig); paths.append(p)
 
-    # 7. P(bind). NISE maximises ligand pLDDT + P(bind), so the question is not what the value
-    # is but whether it MOVES, and whether it has spread -- a saturated P(bind) carries no
-    # gradient and the objective term contributes nothing.
+    # 7. The score -- what NISE actually maximises for this campaign, and which of its two
+    # terms is limiting. The paper's convergence is defined on this: "until a score > 1.98 was
+    # achieved and no change in TOP BACKBONE score was observed for 5 NISE iterations", so the
+    # bar applies to the best design, not the median. Both are drawn.
     pb_its = [i for i in sits if 'affinity_probability_binary' in sm_hist[i]
               and sm_hist[i]['affinity_probability_binary'].notna().any()]
     if pb_its:
-        fig, ax = plt.subplots(1, 2, figsize=(9.2, 3.2))
-        med = [sm_hist[i]['affinity_probability_binary'].median() for i in pb_its]
-        o5 = [100 * (sm_hist[i]['affinity_probability_binary'] > 0.5).mean() for i in pb_its]
-        ax[0].plot(pb_its, med, 'o-', color='#8a5fd3', lw=1.8, ms=4)
-        ax[0].set_ylim(0, 1)
-        ax[0].set_xlabel('iteration')
-        ax[0].set_ylabel('median P(bind)')
-        ax[0].axhline(0.5, color='#eb6834', lw=1.2, ls=':')
-        ax[0].set_title('P(bind) trajectory  (%.3f -> %.3f)' % (med[0], med[-1]), fontsize=9.5)
-        ax2 = ax[0].twinx()
-        ax2.plot(pb_its, o5, 's--', color='#8a8984', lw=1, ms=3)
-        ax2.set_ylabel('% above 0.5 filter', color='#8a8984')
-        ax2.set_ylim(0, 103)
-        last = sm_hist[pb_its[-1]]['affinity_probability_binary'].dropna()
-        ax[1].hist(last, bins=30, color='#8a5fd3', alpha=.85, edgecolor='white', linewidth=.5)
-        ax[1].set_xlim(0, 1)
-        ax[1].set_xlabel('P(bind)')
-        spread = float(last.max() - last.min())
-        ax[1].set_title('iteration %d: spread %.3f%s' % (
-            pb_its[-1], spread, '' if spread > 0.15 else '   SATURATED'), fontsize=9.5)
+        fig, ax = plt.subplots(1, 2, figsize=(9.6, 3.4))
+
+        def _score(i):
+            d = sm_hist[i]
+            lp = d['complex_plddt'] if 'complex_plddt' in d else None
+            lp = hist[i]['ligand_plddts'] if i in hist else lp
+            return (pd.to_numeric(lp, errors='coerce').reset_index(drop=True)
+                    + d['affinity_probability_binary'].reset_index(drop=True)).dropna()
+
+        smed = [_score(i).median() for i in pb_its]
+        smax = [_score(i).max() for i in pb_its]
+        ax[0].plot(pb_its, smax, 'o-', color='#2a78d6', lw=1.8, ms=4, label='best (top backbone)')
+        ax[0].plot(pb_its, smed, 'o--', color='#2a78d6', lw=1.2, ms=3, alpha=.6, label='median')
+        ax[0].axhline(1.98, color='crimson', ls=':', lw=1.4)
+        ax[0].annotate('APEX convergence 1.98', (pb_its[0], 1.98), xytext=(2, 3),
+                       textcoords='offset points', color='crimson', fontsize=7)
+        ax[0].set_ylim(0, 2.1)
+        ax[0].set_xlabel('NISE iteration')
+        ax[0].set_ylabel('score = ligand pLDDT + P(bind)')
+        ax[0].set_title('Score: what NISE maximises  (best %.3f)' % smax[-1], fontsize=9.5)
+        ax[0].legend(fontsize=7)
+
+        lpm = [pd.to_numeric(hist[i]['ligand_plddts'], errors='coerce').median()
+               for i in pb_its if i in hist]
+        pbm = [sm_hist[i]['affinity_probability_binary'].median() for i in pb_its]
+        ax[1].plot(pb_its[:len(lpm)], lpm, 'o-', color='#1baf7a', lw=1.8, ms=4,
+                   label='ligand pLDDT')
+        ax[1].plot(pb_its, pbm, 'o-', color='#8a5fd3', lw=1.8, ms=4, label='P(bind)')
+        ax[1].axhline(0.99, color='crimson', ls=':', lw=1.2)
+        ax[1].set_ylim(0, 1.05)
+        ax[1].set_xlabel('NISE iteration')
+        ax[1].set_ylabel('median')
+        # 1.98 needs BOTH terms near 0.99, so the lower line is the one holding the score back.
+        lim = 'P(bind)' if (pbm and lpm and pbm[-1] < lpm[-1]) else 'ligand pLDDT'
+        ax[1].set_title('Which term limits the score?  -> %s' % lim, fontsize=9.5)
+        ax[1].legend(fontsize=7)
         for a in ax:
             a.grid(alpha=.3)
-        p = out_dir / '7_pbind.png'
+        p = out_dir / '7_score.png'
         fig.tight_layout()
         fig.savefig(p)
         plt.close(fig)
