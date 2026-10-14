@@ -185,6 +185,29 @@ four-helix bundle the method was developed on.
 (deprotonated, 13²-S) ligand, not a regression in design quality — v5 was burying a neutral
 acid. Neither reaches the COMBS 0.75 target.
 
+## P(bind) — the signal we have never measured **[paper, 2026]**
+
+Boltz-2's `affinity_probability_binary`. The published paper's best campaign (APEX, 80 pM)
+maximised **ligand pLDDT + P(bind)** as the NISE objective, not ligand pLDDT alone.
+
+Why it is not redundant, measured by them:
+- ligand pLDDT **is** correlated with ipAE and ipTM, so those add nothing
+- P(bind) is **uncorrelated** with ligand pLDDT
+- high P(bind) → better shape complementarity (p < 1e-12) and lower void volume (p = 0.022);
+  no difference in ligand SASA (p = 0.724)
+- it separates binders from non-binders, **not** strong from weak
+
+**No campaign of ours has computed it.** v5, v7 and v8 all set
+`objective_function = 'ligand_plddt'`, which leaves `boltz2_predict_affinity = False`.
+It was never evaluated — not rejected. (The `Spearman = -0.058` result in
+`main_pipeline/scripts/boltz2_gate.py` is Boltz `confidence_score` vs AF3 `ranking_score`,
+a different quantity; that file says so itself.)
+
+It targets our known weakness: v8 packstat 0.633, apolar burial 0.690 vs the COMBS target 0.75.
+
+**Constraint:** P(bind) is a Boltz-2 head. AF3 has no equivalent, so an AF3-led campaign
+forfeits it. See `docs/PAPER_2026.md`.
+
 ## Engine-dependent gates **[ours]**
 
 Ligand pLDDT does **not** transfer between engines — Boltz median 0.865 vs AF3 0.753
