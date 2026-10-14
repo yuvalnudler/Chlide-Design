@@ -123,3 +123,60 @@ def test_order_section_absent_without_an_order_dir(v7_html):
     """v7 has no ORDER/ -- the section must not render at all, not render empty."""
     assert 'Suggested order' not in v7_html
     assert 'class=pick' not in v7_html
+
+
+# ------------------------------------------------------------------ migrated tool wiring
+
+def _load(name: str):
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(name, str(ROOT / 'tools' / f'{name}.py'))
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ['x']
+    try:
+        spec.loader.exec_module(mod)
+    except SystemExit:
+        pass
+    finally:
+        sys.argv = argv
+    return mod
+
+
+def test_no_cross_campaign_paths_in_tools():
+    """A tool must never point at a sibling campaign.
+
+    `BOLTZ_DONOR = Path('.../nise_bdfp44_v7')` lived inside v8. That class of reference is
+    how a tool rebuilt a finished campaign's ligand and a driver nearly wrote into a closed
+    archive -- five incidents. Usage examples in docstrings are the only allowance.
+    """
+    import re
+    bad = []
+    for f in sorted((ROOT / 'tools').glob('*.py')):
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if (re.search(r'/home/data/yuvaln/nise_bdfp44_v\d', line)
+                    and not line.lstrip().startswith('#')):
+                if f.name == 'config_equivalence.py':
+                    continue          # usage example in the module docstring
+                bad.append(f'{f.name}:{i}: {line.strip()[:70]}')
+    assert not bad, 'cross-campaign paths:\n' + '\n'.join(bad)
+
+
+def test_boltz_cache_resolution():
+    """Explicit wins; a campaign without checkpoints must REFUSE, not silently borrow."""
+    cf = _load('crossfold')
+    v7 = Path('/home/data/yuvaln/nise_bdfp44_v7')
+    v8 = Path('/home/data/yuvaln/nise_bdfp44_v8')
+    if not (v7 / 'boltz_cache').is_dir():
+        pytest.skip('campaigns not present')
+    assert cf.resolve_boltz_cache(v7) == v7 / 'boltz_cache'
+    assert cf.resolve_boltz_cache(v8, str(v7 / 'boltz_cache')) == v7 / 'boltz_cache'
+    with pytest.raises(SystemExit) as e:
+        cf.resolve_boltz_cache(v8)
+    assert 'boltz_cache' in str(e.value)       # names where it looked
+
+
+def test_cascade_loads_sasa_from_its_own_directory():
+    """One set of SASA constants. If the cascade and sasa_rank diverge, the 142-design
+    shortlist and the top-25 detail table stop agreeing and nothing says so."""
+    src = (ROOT / 'tools' / 'polizzi_cascade.py').read_text()
+    assert "Path(__file__).parent / 'sasa_rank.py'" in src
