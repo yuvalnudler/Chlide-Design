@@ -268,6 +268,33 @@ def summarise(run_dir: Path, iteration: int, df: pd.DataFrame, sm: pd.DataFrame,
             if c in sm and sm[c].notna().any():
                 s = sm[c].dropna()
                 L.append(f"  {lab}: med {s.median():.3f}  max {s.max():.3f}")
+
+        # P(bind) sits under the confidence block because it comes from the same Boltz-2 run,
+        # but it is NOT a confidence metric: it is a separate head trained on measured binding
+        # data, and it is the second term of this campaign's objective. Reported with the
+        # paper's filter fractions and the score it adds up to.
+        if 'affinity_probability_binary' in sm and sm['affinity_probability_binary'].notna().any():
+            pb = sm['affinity_probability_binary'].dropna()
+            spread = float(pb.max() - pb.min())
+            L.append(f"  <b>P(bind)</b>: med {pb.median():.3f}  max {pb.max():.3f}"
+                     f"  spread {spread:.3f}")
+            L.append(f"    above 0.5 filter {100 * (pb > 0.5).mean():.0f}%"
+                     f"   above 0.8 {100 * (pb > 0.8).mean():.0f}%")
+            if spread <= 0.15:
+                L.append("    <b>SATURATED</b> - no spread means no gradient; the objective "
+                         "term is contributing nothing")
+            if 'affinity_pred_value' in sm and sm['affinity_pred_value'].notna().any():
+                av = sm['affinity_pred_value'].dropna()
+                # log10(IC50 in uM); more negative is tighter
+                L.append(f"    predicted affinity med {av.median():+.2f} log10(IC50/uM)"
+                         f"  ~= {10 ** av.median() * 1000:.0f} nM")
+            lp = pd.to_numeric(df['ligand_plddts'], errors='coerce') if 'ligand_plddts' in df \
+                else pd.Series(dtype=float)
+            if lp.notna().any():
+                sc = (lp.reset_index(drop=True) + pb.reset_index(drop=True)).dropna()
+                if len(sc):
+                    L.append(f"  <b>score</b> (ligand pLDDT + P(bind)): med {sc.median():.3f}"
+                             f"  <b>best {sc.max():.3f}</b>   APEX converged at &gt;1.98")
         if 'mg_ring_offset' in sm and sm['mg_ring_offset'].notna().any():
             r = sm['mg_ring_offset'].dropna()
             h = sm['his_mg'].dropna() if 'his_mg' in sm else pd.Series(dtype=float)
