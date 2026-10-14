@@ -10,12 +10,12 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 |---|---|
 | 0 bootstrap, pyproject, CI | done |
 | 1 `config.py` + campaign YAMLs | done — both proven equivalent to their drivers (19 params, 0 unexplained, `tools/config_equivalence.py`) |
-| **2 engines + stages + tools** | **tools DONE (24); engines DONE; terminal stages DONE; loop + `chlide run` next** |
+| **2 engines + stages + tools** | **tools, engines, terminal stages, config→params all DONE; stage EXECUTION is the gap** |
 | 3 provenance, logging, watchdog, GPU | not started |
 | 4 backbone generation (default-off) | not started |
 | 5 docs, golden tests, data migration | `CALIBRATION.md` and this file landed early |
 
-73 tests pass, no GPU needed. `pytest -q` is the gate.
+90 tests pass, no GPU needed. `pytest -q` is the gate.
 
 ## What is migrated
 
@@ -43,10 +43,15 @@ tree of symlinks into it, so `~/.boltz` is not a reliable fallback for every use
 
 ## Next, in order
 
-1. **`loop.py` and `chlide run`.** The terminal pipeline is encoded and tested
-   (`src/chlide/stages/`); what remains is the ITERATION loop from the drivers and a runner
-   that executes a stage list. Until `chlide run` exists, a real campaign is still launched
-   from `tools/finish_at_iter.sh` and a copied driver.
+1. **Execution.** Everything is now described and tested; nothing is *run* from here.
+   - `src/chlide/loop.py` turns a campaign YAML into the params dict `main()` takes, verified
+     against both drivers in both directions (34 of 44 params compared literally).
+   - `chlide plan <campaign> --out <dir>` prints the whole plan and touches nothing.
+     `chlide finish <dir>` lists the terminal pipeline.
+   - **Missing:** a runner that actually executes a stage list (subprocess per tool, honouring
+     `optional`, `needs_gpu` and the reserve), and the port of the driver's `main()` with the
+     fold function injected from `chlide.engines`. Until then a real campaign launches from a
+     copied driver plus `tools/finish_at_iter.sh`.
 
 2. **Phase 3** — provenance (`run_manifest.json` with git SHA + weights hashes), the JSONL event
    log, the resume watchdog, `gpu.py`.
