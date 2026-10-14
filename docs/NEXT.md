@@ -10,7 +10,7 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 |---|---|
 | 0 bootstrap, pyproject, CI | done |
 | 1 `config.py` + campaign YAMLs | done — both proven equivalent to their drivers (19 params, 0 unexplained, `tools/config_equivalence.py`) |
-| **2 engines + stages + tools** | **9 of 22 tools migrated** |
+| **2 engines + stages + tools** | **9 of 23 tools migrated; engine adapters DONE** |
 | 3 provenance, logging, watchdog, GPU | not started |
 | 4 backbone generation (default-off) | not started |
 | 5 docs, golden tests, data migration | `CALIBRATION.md` and this file landed early |
@@ -20,7 +20,8 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 ## What is migrated
 
 `sasa_rank.py`, `make_report.py`, `paper_figures.py`, `crossfold.py`, `af3_interface_pae.py`,
-`af3_monomer.py`, `polizzi_cascade.py`, `boltz_coord_patch.py`, plus `src/chlide/notify.py`
+`af3_monomer.py`, `polizzi_cascade.py`, `boltz_coord_patch.py`, `af3_adapter.py`, plus
+`src/chlide/notify.py`
 (telegram, vendored verbatim). **No cross-campaign paths remain in `tools/`** — enforced by
 `tests/test_report.py::test_no_cross_campaign_paths_in_tools`.
 
@@ -40,9 +41,11 @@ exist in eight versions and how two stale engine labels shipped (`BUGS.md`, 2025
 
 ## Next, in order
 
-1. **`af3_adapter.py`** (329, 2 hardcoded paths) and the engine adapters →
-   `src/chlide/engines/{base,boltz,af3}.py` behind the `Folder` protocol. This is the
-   remaining structural work; everything above it is file movement.
+1. ~~engine adapters~~ **done** — `src/chlide/engines/{base,af3,boltz}.py`. Both engines
+   satisfy the `Folder` protocol; `get_folder(name)` and `other_engine(name)` resolve
+   `cross_check: auto`. Capability differences are **declared, not hidden**
+   (`supports_chirality_restraints`, `supports_metal_distance_restraint`), and
+   `check_metal_restraint()` makes AF3's refusal structural rather than a comment.
 2. **`harvest_global_top.py`** (289), **`relax_pool.py`** (236), **`final_shortlist.py`** (244),
    **`rosetta_relax.py`** (177), **`burial_rescore.py`** (143) — the in-loop pipeline.
 3. The ligand build chain: `repair_cla_oxy.py` (278, 2 hardcoded), `build_boltz_ccd.py`,
