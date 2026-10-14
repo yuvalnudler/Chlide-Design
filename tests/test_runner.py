@@ -84,7 +84,8 @@ def test_a_stage_that_writes_its_output_is_ok(tmp_path):
 
 def test_nonzero_exit_is_reported_with_its_message(tmp_path):
     name = '_fake_boom'
-    _tool(tmp_path, name, 'import sys\nprint("boom: ligand missing", file=sys.stderr)\nsys.exit(3)\n')
+    _tool(tmp_path, name,
+          'import sys\nprint("boom: ligand missing", file=sys.stderr)\nsys.exit(3)\n')
     try:
         r = StageRunner(tmp_path).run_one(Stage(name='s', tool=name))
         assert r.outcome is Outcome.FAILED
