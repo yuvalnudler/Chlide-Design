@@ -17,17 +17,21 @@ from __future__ import annotations
 from chlide.engines import other_engine
 from chlide.stages.base import Stage, validate_order
 
+# The engine writes here whichever engine it is: af3_adapter.to_boltz_layout puts AF3
+# output into a boltz_results_* tree on purpose, so the path name is not evidence.
+_PRED = 'input/sampled_backbones/iter_*/boltz_results_boltz_inputs/predictions/*/*_model_0.pdb'
+
 # Written by the LOOP, before any of this runs.
 PREEXISTING = {
     'input/sampling_dataframes/*.pkl',
     'input/sampled_backbones/iter_*/backbone_queue.txt',
-    'input/sampled_backbones/iter_*/boltz_results_boltz_inputs/predictions/*/*_model_0.pdb',
+    _PRED,
 }
 
 _RELAX = Stage(
     name='relax_pool',
     tool='relax_pool',
-    reads=('input/sampled_backbones/iter_*/boltz_results_boltz_inputs/predictions/*/*_model_0.pdb',),
+    reads=(_PRED,),
     writes=('results/relaxed_pool/index.csv',),
     # Must not race the driver's own in-loop relax for the pool lock -- the driver is stopped first.
 )
