@@ -14,6 +14,11 @@ from chlide.config import ConfigError, load_campaign
 def _validate(paths: list[Path]) -> int:
     bad = 0
     for p in paths:
+        # A leading underscore marks a FRAGMENT, not a campaign: _base.yaml is deep-merged
+        # into every campaign and is not a valid config on its own.
+        if p.name.startswith('_'):
+            print(f'skip  {p.name} (fragment, merged into every campaign)')
+            continue
         try:
             cfg = load_campaign(p)
         except (ConfigError, ValidationError) as e:
@@ -94,6 +99,16 @@ def _finish(args) -> int:
     return 0
 
 
+
+def _run(args) -> int:
+    """Launch a campaign. The run directory is created here and nothing is copied into it."""
+    from chlide.loop import run_campaign
+    cfg = load_campaign(args.campaign)
+    return run_campaign(cfg, args.out, campaign_file=args.campaign,
+                        debug=args.debug, allow_foreign_gpu=args.allow_foreign_gpu,
+                        dry_run=args.dry_run)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog='chlide')
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -108,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
     f = sub.add_parser('finish', help='the terminal pipeline for a run directory')
     f.add_argument('run_dir', type=Path)
 
+    r = sub.add_parser('run', help='launch a campaign from a YAML')
+    r.add_argument('campaign', type=Path)
+    r.add_argument('--out', type=Path, required=True, help='run directory')
+    r.add_argument('--debug', action='store_true', help='smoke test: 1 sequence per device')
+    r.add_argument('--dry-run', action='store_true', help='resolve everything, launch nothing')
+    r.add_argument('--allow-foreign-gpu', action='store_true',
+                   help='proceed although another user holds a requested card')
+
     a = ap.parse_args(argv)
     if a.cmd == 'validate':
         return _validate(a.paths)
@@ -115,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         return _plan(a)
     if a.cmd == 'finish':
         return _finish(a)
+    if a.cmd == 'run':
+        return _run(a)
     ap.error(f'unknown command {a.cmd}')
     return 2
 

@@ -304,6 +304,15 @@ class CampaignConfig(_Base):
             if '..' in p.parts:
                 raise ConfigError(f'{label}={p} escapes the run directory.')
 
+        # P(bind) is Boltz-2's affinity head. AF3 has no equivalent, so an AF3-led campaign
+        # asking for it would read a key that is never written -- a silent no-op that looks
+        # like a configured objective. Reject it at parse time.
+        if 'pbind' in self.loop.objective and self.engine.fold != 'boltz':
+            raise ConfigError(
+                f'loop.objective={self.loop.objective!r} needs P(bind), which is a Boltz-2 '
+                f'head (affinity_probability_binary). engine.fold is {self.engine.fold!r} and '
+                'has no equivalent, so the term would contribute nothing. Use fold: boltz.')
+
         if self.stages.crossfold.enabled and self.engine.resolved_cross_check is None:
             raise ConfigError(
                 'stages.crossfold is enabled but engine.cross_check is "none".')

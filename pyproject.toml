@@ -52,6 +52,9 @@ select = ["E", "F", "W", "I", "UP", "B"]
 "tools/af3_monomer.py" = ["E501"]
 "tools/polizzi_cascade.py" = ["E501"]
 "tools/boltz_coord_patch.py" = ["E501"]
+# The NISE driver, merged verbatim from the two campaign copies. Reformatting it would
+# destroy the line-by-line correspondence that makes the merge auditable.
+"src/chlide/nise_driver.py" = ["E501", "E741", "F403", "F405", "E402", "B006", "B007", "B023"]
 "tools/af3_adapter.py" = ["E501"]
 "tools/harvest_global_top.py" = ["E501"]
 "tools/relax_pool.py" = ["E501"]

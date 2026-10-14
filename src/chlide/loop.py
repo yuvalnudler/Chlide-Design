@@ -17,11 +17,12 @@ turn it.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from chlide.config import CampaignConfig
 
-__all__ = ['nise_params', 'LASER_SAMPLING_PARAMS', 'nise_directory']
+__all__ = ['nise_params', 'run_campaign', 'LASER_SAMPLING_PARAMS', 'nise_directory']
 
 # Identical in every campaign to date. Cysteine is disabled because the paper's cascade drops
 # any sequence containing one, and disable_charged_fs keeps D/E/K/R out of the buried shell
@@ -148,3 +149,64 @@ def _boltz_executable() -> str:
     patch = Path(__file__).resolve().parents[2] / 'tools' / 'boltz_coord_patch.py'
     py = os.environ.get('BOLTZ_PYTHON', '/home/yigall/mambaforge/envs/boltz/bin/python')
     return f'{py} {patch}'
+
+
+def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | None = None,
+                 debug: bool = False, allow_foreign_gpu: bool = False,
+                 dry_run: bool = False) -> int:
+    """Launch a NISE campaign from a validated config.
+
+    The driver is `chlide.nise_driver`, ONE module for both engines. v7 and v8 were two
+    1200-line files whose only structural difference was which fold function existed; here
+    `FOLD_ENGINE` selects at runtime. Nothing is copied into the run directory.
+    """
+    import uuid
+
+    from chlide.eventlog import EventLog
+    from chlide.gpu import GpuLock, assert_gpus_free
+    from chlide.provenance import write_manifest
+
+    run_dir = Path(run_dir).resolve()
+    params = nise_params(cfg, run_dir, debug=debug)
+    run_id = f'{cfg.name}-{time.strftime("%Y%m%dT%H%M%S")}-{uuid.uuid4().hex[:6]}'
+    log = EventLog(run_dir / 'logs' / 'events.jsonl', run_id)
+
+    if dry_run:
+        print(f'DRY RUN {run_id}')
+        print(f'  engine {cfg.engine.fold}, constrain_his_mg={cfg.engine.constrain_his_mg}')
+        print(f'  objective {cfg.loop.objective}')
+        print(f'  would write {run_dir / "run_manifest.json"}')
+        return 0
+
+    # Refuse before writing anything, so a blocked launch leaves no half-made run directory.
+    assert_gpus_free(list(cfg.engine.devices), allow_foreign=allow_foreign_gpu)
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / 'logs').mkdir(exist_ok=True)
+    manifest = write_manifest(run_dir, cfg, params, campaign_file=campaign_file,
+                              extra={'run_id': run_id})
+    log.emit(event='run_start', campaign=cfg.name, engine=cfg.engine.fold,
+             objective=cfg.loop.objective, manifest=str(manifest))
+    print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
+
+    # The driver reads these two at import time; they are the whole engine switch.
+    os.environ['CHLIDE_RUN_DIR'] = str(run_dir)
+    os.environ['CHLIDE_FOLD_ENGINE'] = cfg.engine.fold
+    os.environ['CHLIDE_CONSTRAIN_HIS_MG'] = '1' if cfg.engine.constrain_his_mg else '0'
+
+    with GpuLock(list(cfg.engine.devices)):
+        from chlide import nise_driver
+        if nise_driver.FOLD_ENGINE != cfg.engine.fold:
+            raise RuntimeError(
+                f'driver imported with FOLD_ENGINE={nise_driver.FOLD_ENGINE!r} but the '
+                f'campaign asks for {cfg.engine.fold!r}. The driver reads it at import time, '
+                f'so it must not be imported before this point.')
+        t0 = time.time()
+        try:
+            nise_driver.main(**params)
+        except BaseException as e:               # includes KeyboardInterrupt / SIGTERM paths
+            log.emit(event='run_failed', error=f'{type(e).__name__}: {e}',
+                     seconds=round(time.time() - t0, 1))
+            raise
+    log.emit(event='run_end', seconds=round(time.time() - t0, 1))
+    return 0

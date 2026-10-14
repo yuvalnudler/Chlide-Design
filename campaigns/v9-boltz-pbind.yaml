@@ -1,0 +1,46 @@
+# v9 -- v7 plus P(bind). A SINGLE-VARIABLE test.
+#
+# The published Nature version (doi:10.1038/s41586-026-10670-w) maximised
+# ligand pLDDT + P(bind) rather than ligand pLDDT alone, and its best campaign
+# (APEX) produced an 80 pM binder, 5 of 6 tested. Their measurements: ligand
+# pLDDT IS correlated with ipAE and ipTM, so those add nothing, but P(bind) is
+# NOT correlated with it, and high P(bind) means better Rosetta shape
+# complementarity (p < 1e-12) and lower void volume (p = 0.022).
+#
+# That is exactly where our designs are weakest: v8 packstat 0.633 and apolar
+# burial 0.690 against the COMBS target of 0.75. No campaign of ours has ever
+# computed P(bind) -- v5, v7 and v8 all ran objective_function='ligand_plddt',
+# which leaves boltz2_predict_affinity False. See docs/PAPER_2026.md.
+#
+# WHY BOLTZ AND NOT AF3. P(bind) is a Boltz-2 head; AF3 has no equivalent. v8
+# (AF3-led) is our best campaign, but comparing Boltz+P(bind) against it would
+# confound the engine with the objective. v9 is therefore v7 + P(bind) and
+# NOTHING else, so v7 vs v9 isolates P(bind) exactly as v5/v6b/v7 isolated
+# deprotonation.
+#
+# WHAT WE DO NOT KNOW. Boltz-2's affinity head was trained on drug-like
+# protein-ligand complexes. Exatecan and apixaban are in distribution; a
+# 46-heavy-atom Mg-porphyrin is not. P(bind) may be uninformative here, or
+# saturate at 0 or 1 and carry no gradient at all. That is worth finding out in
+# two iterations rather than twenty -- check the P(bind) spread at iteration 2
+# before committing the rest of the run.
+name: v9-boltz-pbind
+description: >
+  v7 reproduced exactly, with the NISE objective changed from ligand pLDDT to
+  ligand pLDDT + P(bind). Boltz-2x leads with the patched two-sided 2.0-2.6 A
+  His-Mg window; AF3 cross-checks. Everything else -- ligand, scaffold, gates,
+  iteration budget -- is identical to v7.
+
+engine:
+  fold: boltz
+  cross_check: auto          # -> af3
+  constrain_his_mg: true
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+loop:
+  # THE ONLY LINE THAT DIFFERS FROM v7.
+  # NISE sums them unweighted: design_ligand_plddt + affinity_probability_binary,
+  # both on 0-1, matching the paper's "sum of Ligand pLDDT and predicted_affinity_binary".
+  # Setting this also flips boltz2_predict_affinity on, which makes the driver emit
+  # `properties: [affinity: {binder: B}]` into every Boltz YAML.
+  objective: ligand_plddt_and_pbind

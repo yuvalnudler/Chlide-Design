@@ -182,13 +182,13 @@ def test_reduce_is_never_invoked(tmp_path):
 def test_affinity_prediction_follows_the_objective(tmp_path):
     """`boltz2_predict_affinity` is a ternary on the objective in the driver, so the AST reader
     cannot evaluate it. Assert the rule directly instead of leaving it uncovered."""
-    cfg = load_campaign(CAMPAIGNS / 'v8-af3-coo.yaml')
+    cfg = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
     assert cfg.loop.objective == 'ligand_plddt'
     assert nise_params(cfg, tmp_path)['boltz2_predict_affinity'] is False
 
     import copy
     raw = copy.deepcopy(cfg.model_dump())
-    raw['loop']['objective'] = 'ligand_plddt_and_pbind'
+    raw['loop']['objective'] = 'ligand_plddt_and_pbind'   # boltz-led, so this is allowed
     from chlide.config import CampaignConfig
     assert nise_params(CampaignConfig.model_validate(raw), tmp_path)['boltz2_predict_affinity']
 
@@ -227,3 +227,43 @@ def test_resolver_prefers_the_run_directory(tmp_path):
 def test_resolver_returns_none_rather_than_a_path_that_does_not_exist(tmp_path):
     from chlide.config import resolve_input
     assert resolve_input(tmp_path, Path('input/missing.cif'), None, '/nope') is None
+
+
+# ------------------------------------------------------------------ v9 / P(bind)
+
+def test_v9_differs_from_v7_only_in_the_objective(tmp_path):
+    """v9 is a single-variable test. If anything else drifts, v7 vs v9 stops isolating P(bind)."""
+    v7 = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
+    v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
+    for field in ('ligand', 'scaffold', 'gates', 'stages', 'compute'):
+        assert getattr(v7, field) == getattr(v9, field), f'{field} drifted between v7 and v9'
+    assert v7.engine == v9.engine, 'v9 must use the same engine configuration as v7'
+    assert v7.loop.objective == 'ligand_plddt'
+    assert v9.loop.objective == 'ligand_plddt_and_pbind'
+    # everything else about the loop identical
+    assert (v7.loop.iterations, v7.loop.per_backbone, v7.loop.top_backbones) == \
+           (v9.loop.iterations, v9.loop.per_backbone, v9.loop.top_backbones)
+
+
+def test_pbind_objective_turns_boltz_affinity_on(tmp_path):
+    """Setting the objective is the WHOLE change: it flips boltz2_predict_affinity, which makes
+    the driver emit `properties: [affinity: {binder: B}]` into every Boltz YAML."""
+    v9 = nise_params(load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml'), tmp_path)
+    v7 = nise_params(load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml'), tmp_path)
+    assert v9['boltz2_predict_affinity'] is True
+    assert v7['boltz2_predict_affinity'] is False
+    diff = {k for k in v9 if v9[k] != v7[k]}
+    assert diff == {'objective_function', 'boltz2_predict_affinity'}, (
+        f'v9 should differ from v7 in exactly those two params, got {diff}')
+
+
+def test_pbind_requires_boltz():
+    """P(bind) is a Boltz-2 head. An AF3-led campaign asking for it would silently get nothing."""
+    import copy
+
+    from chlide.config import CampaignConfig
+    raw = copy.deepcopy(load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml').model_dump())
+    raw['engine']['fold'] = 'af3'
+    raw['engine']['constrain_his_mg'] = False
+    with pytest.raises(Exception, match='Boltz-2 head|contribute nothing'):
+        CampaignConfig.model_validate(raw)
