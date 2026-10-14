@@ -67,7 +67,7 @@ NISE supports it directly: `objective_function` accepts `ligand_plddt_and_pbind`
 | | Published (APEX) | Ours (v8) |
 |---|---|---|
 | ligand pLDDT | **> 0.9** | > 0.80 |
-| ligand heavy-atom RMSD | **< 1.5 Å** | < 2.5 Å |
+| ligand heavy-atom RMSD (selection) | < 1.5 Å | < 1.5 Å |
 | protein Cα RMSD | < 1.5 Å | < 1.5 Å |
 | P(bind) | **> 0.5** (0.8 if > 3,000 pass) | not computed |
 | apo-repack clashes | 0 | 0 |
@@ -82,9 +82,18 @@ Gate values do **not** transfer across engines (our own measurement: Boltz ligan
 not directly a looseness. But v8's p90 ligand pLDDT is **0.964**, so a 0.9 gate is affordable on
 the AF3 scale and our 0.80 is almost certainly not doing selection work.
 
-The ligand RMSD difference is real and not engine-scaled: **2.5 Å vs 1.5 Å**. Ours was widened
-for a 46-heavy-atom ligand with a floppy propionate arm (which is masked), but it is the loosest
-gate in our funnel relative to theirs.
+**CORRECTION.** An earlier draft of this file claimed our ligand RMSD gate is 2.5 Å against
+their 1.5 Å. That was wrong — it compared two different gates. We have **three**:
+
+| where | value | what it gates |
+|---|---|---|
+| in-loop self-consistency (`run_nise_*.py`) | ligand **2.5**, protein 1.5 | which predictions become the next iteration's backbones — deliberately permissive, this is the EXPANSION step and a tight gate here starves the trajectory |
+| harvest (`harvest_global_top.py`, `PAPER` dict) | ligand **1.5**, protein 1.5 | what reaches the shortlist — the paper's own values |
+| cascade (`polizzi_cascade.py`, `RMSD_TO_MIN_MAX`) | 1.5 | prediction vs Rosetta-minimised — a different quantity entirely |
+
+Our **selection** gate has been 1.5 Å since the first campaign, matching the paper. The 2.5 is
+the in-loop expansion threshold and has no counterpart in the published filtering description.
+So on ligand RMSD we are not looser than the paper.
 
 ---
 
