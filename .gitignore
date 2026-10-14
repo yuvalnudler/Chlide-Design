@@ -22,3 +22,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Secrets never enter this repo. The Telegram token lives in
+# ~/.config/pipeline_telegram.env (mode 0600) and is read from the environment.
+*.env
+.env
+*secret*
+*token*
