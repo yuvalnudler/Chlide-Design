@@ -231,8 +231,13 @@ def test_resolver_returns_none_rather_than_a_path_that_does_not_exist(tmp_path):
 
 # ------------------------------------------------------------------ v9 / P(bind)
 
-def test_v9_differs_from_v7_only_in_the_objective(tmp_path):
-    """v9 is a single-variable test. If anything else drifts, v7 vs v9 stops isolating P(bind)."""
+def test_v9_differs_from_v7_in_the_objective_and_the_budget(tmp_path):
+    """v9 deliberately changes TWO things: the objective and the iteration budget.
+
+    Everything else must still match v7, because the matched prefix (v9 iterations 0-13 against
+    v7's 0-13) is what keeps P(bind) attributable. A drift in the ligand, scaffold, gates or
+    engine would destroy that.
+    """
     v7 = load_campaign(CAMPAIGNS / 'v7-boltz-coo.yaml')
     v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
     for field in ('ligand', 'scaffold', 'gates', 'stages', 'compute'):
@@ -240,9 +245,11 @@ def test_v9_differs_from_v7_only_in_the_objective(tmp_path):
     assert v7.engine == v9.engine, 'v9 must use the same engine configuration as v7'
     assert v7.loop.objective == 'ligand_plddt'
     assert v9.loop.objective == 'ligand_plddt_and_pbind'
-    # everything else about the loop identical
-    assert (v7.loop.iterations, v7.loop.per_backbone, v7.loop.top_backbones) == \
-           (v9.loop.iterations, v9.loop.per_backbone, v9.loop.top_backbones)
+    # the SAMPLING is identical; only the budget and the auto-stop differ
+    assert (v7.loop.per_backbone, v7.loop.top_backbones) == \
+           (v9.loop.per_backbone, v9.loop.top_backbones)
+    assert v9.loop.iterations > v7.loop.iterations        # runs past the plateau
+    assert v7.loop.convergence.enabled and not v9.loop.convergence.enabled
 
 
 def test_pbind_objective_turns_boltz_affinity_on(tmp_path):
@@ -253,8 +260,8 @@ def test_pbind_objective_turns_boltz_affinity_on(tmp_path):
     assert v9['boltz2_predict_affinity'] is True
     assert v7['boltz2_predict_affinity'] is False
     diff = {k for k in v9 if v9[k] != v7[k]}
-    assert diff == {'objective_function', 'boltz2_predict_affinity'}, (
-        f'v9 should differ from v7 in exactly those two params, got {diff}')
+    assert diff == {'objective_function', 'boltz2_predict_affinity', 'num_iterations'}, (
+        f'v9 should differ from v7 in exactly those params, got {diff}')
 
 
 def test_pbind_requires_boltz():
@@ -276,7 +283,8 @@ def test_debug_is_actually_small(tmp_path):
     cfg = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
     prod = nise_params(cfg, tmp_path, debug=False)
     dbg = nise_params(cfg, tmp_path, debug=True)
-    assert prod['num_iterations'] == 25 and prod['sequences_sampled_per_backbone'] == 500
+    assert prod['num_iterations'] == cfg.loop.iterations
+    assert prod['sequences_sampled_per_backbone'] == 500
     assert dbg['num_iterations'] == 2
     assert dbg['sequences_sampled_per_backbone'] == len(cfg.engine.devices)
     designs = (dbg['num_iterations'] * dbg['sequences_sampled_per_backbone']
