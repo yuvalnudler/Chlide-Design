@@ -167,3 +167,72 @@ def test_engine_detection_reads_the_driver_not_the_layout():
     so the directory name is not evidence. Only the driver's import is."""
     src = (Path(__file__).resolve().parents[1] / 'tools' / 'final_shortlist.py').read_text()
     assert "'from af3_adapter import' in drv.read_text()" in src
+
+
+# ------------------------------------------------------------------ the merged driver
+
+DRIVER = Path(__file__).resolve().parents[1] / 'src' / 'chlide' / 'nise_driver.py'
+
+
+def test_driver_dispatches_input_format_as_well_as_the_fold_call():
+    """Boltz reads .yaml, AF3 reads .json. BOTH sites must be engine-dependent.
+
+    The merge originally swapped only predict_complex_structures, so a Boltz-led run wrote AF3
+    JSONs, Boltz found no *.yaml to fold, and the driver died with "not all boltz predictions
+    were written to disk" after 4.5 minutes of GPU time. A smoke test found it; this finds it
+    in 20 ms.
+    """
+    src = DRIVER.read_text()
+    assert "chunk_{idx}_seq_{seq_idx}.yaml" in src, 'no Boltz input path'
+    assert "chunk_{idx}_seq_{seq_idx}.json" in src, 'no AF3 input path'
+    # and the choice must be made, not hardcoded
+    i_json = src.index("chunk_{idx}_seq_{seq_idx}.json")
+    guard = src.rindex('FOLD_ENGINE', 0, i_json)
+    assert i_json - guard < 400, 'the .json path is not guarded by a FOLD_ENGINE check'
+
+
+def test_driver_has_both_fold_implementations_and_a_dispatcher():
+    src = DRIVER.read_text()
+    for needle in ('def _fold_boltz(', 'def _fold_af3(',
+                   'def predict_complex_structures(', "if FOLD_ENGINE == 'af3':",
+                   "if FOLD_ENGINE == 'boltz':"):
+        assert needle in src, needle
+
+
+def test_driver_defaults_are_the_safe_ones():
+    """A mis-wired run must fold UNRESTRAINED rather than crush His-Mg to 1.50 A and flip 13-2."""
+    src = DRIVER.read_text()
+    assert "CONSTRAIN_HIS_MG_BOND = os.environ.get('CHLIDE_CONSTRAIN_HIS_MG', '0') == '1'" in src
+
+
+def test_driver_separates_the_run_directory_from_the_repo_tools():
+    """The per-campaign copies conflated these because the driver lived inside the run."""
+    src = DRIVER.read_text()
+    assert "NISE_RUN_DIR = os.environ.get('CHLIDE_RUN_DIR')" in src
+    assert "TOOLS_DIR = Path(__file__).resolve().parents[2] / 'tools'" in src
+    # tools come from the repo
+    for tool in ('rosetta_relax.py', 'finish_at_iter.sh', 'boltz_coord_patch.py'):
+        assert f"TOOLS_DIR / '{tool}'" in src, f'{tool} should come from the repo'
+
+
+def test_yaml_boilerplate_carries_affinity_and_the_metal_bond():
+    """P(bind) needs `properties: affinity`; the metal bond needs the constraints block."""
+    import importlib.util
+    import os
+    import sys
+    os.environ['CHLIDE_CONSTRAIN_HIS_MG'] = '1'
+    spec = importlib.util.spec_from_file_location('_drv', str(DRIVER))
+    mod = importlib.util.module_from_spec(spec)
+    argv, sys.argv = sys.argv, ['drv']
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:                       # torch/boltz may be absent in some envs
+        pytest.skip('driver dependencies unavailable')
+    finally:
+        sys.argv = argv
+        os.environ.pop('CHLIDE_CONSTRAIN_HIS_MG', None)
+    y = mod.get_boltz_yaml_boilerplate('MAAA', 'C', True)
+    assert 'properties:' in y and 'affinity:' in y and 'binder: B' in y
+    assert 'constraints:' in y and 'NE2' in y and 'MG' in y
+    assert 'msa: empty' in y
+    assert mod.get_boltz_yaml_boilerplate('MAAA', 'C', False).count('affinity') == 0

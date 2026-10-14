@@ -126,8 +126,9 @@ CONSTRAIN_HIS_MG_BOND = os.environ.get('CHLIDE_CONSTRAIN_HIS_MG', '0') == '1'
 
 
 def get_boltz_yaml_boilerplate(sequence: str, smiles: str, predict_affinity: bool):
-    # DEAD IN v6a. The folding engine is AlphaFold3; inputs are written by af3_adapter.af3_json
-    # and the Boltz path is gone. Kept only so a diff against v6b stays readable.
+    # LIVE for FOLD_ENGINE == 'boltz'. `predict_affinity` adds the `properties: affinity`
+    # block that produces P(bind); CONSTRAIN_HIS_MG_BOND adds the His NE2 -- Mg bond that the
+    # patched ConnectionsPotential holds in a two-sided 2.0-2.6 A window.
     boltz_yaml = f"version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: {sequence}\n      msa: empty\n  - ligand:\n      id: B\n      ccd: {BOLTZ_LIGAND_CCD}\n"
     if predict_affinity:
         boltz_yaml += "properties:\n  - affinity:\n      binder: B\n"
@@ -992,13 +993,24 @@ def main(use_wandb, reduce_executable_path, reduce_hetdict_path, **kwargs):
         sampled_sequence_chunks = np.array_split(all_sampled_sequences, len(design_campaign.boltz_inference_devices)) 
         for idx, chunk_sequences in enumerate(sampled_sequence_chunks):
             for seq_idx, seq in enumerate(chunk_sequences):
-                # .json, not .yaml -- but the chunk_N_seq_M stem is preserved exactly, because
-                # every CSV, every results/ identifier and the harvest join key depend on it.
-                boltz_input_output_path = boltz_input_dir / f'chunk_{idx}_seq_{seq_idx}.json'
-                all_boltz_input_path_names.append(boltz_input_output_path.stem)
-                boltz_input_output_path.write_text(json.dumps(af3_json(
-                    boltz_input_output_path.stem, str(seq), BOLTZ_LIGAND_CCD,
-                    Path(NISE_RUN_DIR) / 'input' / 'claox_userccd.cif'), indent=2))
+                # The INPUT FORMAT is engine-dependent too, not just the fold call: Boltz
+                # reads .yaml, AF3 reads .json. Merging only the fold function left this
+                # writing AF3 JSONs for a Boltz-led run, so Boltz found no *.yaml to fold and
+                # the driver failed with "not all boltz predictions were written to disk".
+                # The chunk_N_seq_M STEM is preserved either way, because every CSV, every
+                # results/ identifier and the harvest join key depend on it.
+                if FOLD_ENGINE == 'af3':
+                    boltz_input_output_path = boltz_input_dir / f'chunk_{idx}_seq_{seq_idx}.json'
+                    all_boltz_input_path_names.append(boltz_input_output_path.stem)
+                    boltz_input_output_path.write_text(json.dumps(af3_json(
+                        boltz_input_output_path.stem, str(seq), BOLTZ_LIGAND_CCD,
+                        Path(NISE_RUN_DIR) / 'input' / 'claox_userccd.cif'), indent=2))
+                else:
+                    boltz_input_output_path = boltz_input_dir / f'chunk_{idx}_seq_{seq_idx}.yaml'
+                    all_boltz_input_path_names.append(boltz_input_output_path.stem)
+                    boltz_input_output_path.write_text(get_boltz_yaml_boilerplate(
+                        str(seq), design_campaign.ligand_smiles,
+                        design_campaign.predict_affinity))
 
         all_boltz_model_paths = [(sampling_subdir / 'boltz_results_boltz_inputs' / 'predictions' / x / f'{x}_model_0.pdb') for x in all_boltz_input_path_names]
         all_laser_output_paths = []
