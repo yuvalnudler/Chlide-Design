@@ -10,7 +10,7 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 |---|---|
 | 0 bootstrap, pyproject, CI | done |
 | 1 `config.py` + campaign YAMLs | done — both proven equivalent to their drivers (19 params, 0 unexplained, `tools/config_equivalence.py`) |
-| **2 engines + stages + tools** | **15 of 23 tools migrated; engine adapters DONE** |
+| **2 engines + stages + tools** | **tools DONE (24); engine adapters DONE; stages next** |
 | 3 provenance, logging, watchdog, GPU | not started |
 | 4 backbone generation (default-off) | not started |
 | 5 docs, golden tests, data migration | `CALIBRATION.md` and this file landed early |
@@ -19,40 +19,37 @@ Updated 2026-10-11. Read this first after a break; it is the handoff note.
 
 ## What is migrated
 
-`sasa_rank.py`, `make_report.py`, `paper_figures.py`, `crossfold.py`, `af3_interface_pae.py`,
-`af3_monomer.py`, `polizzi_cascade.py`, `boltz_coord_patch.py`, `af3_adapter.py`, plus
-`src/chlide/notify.py`
-(telegram, vendored verbatim). **No cross-campaign paths remain in `tools/`** — enforced by
-`tests/test_report.py::test_no_cross_campaign_paths_in_tools`.
+**All 24 tools, plus the engine layer.** `tools/` here is now the only place a tool is edited;
+`tools/sync_to_campaign.sh` pushes them outward one-way and records the commit in the campaign's
+`TOOLS_PROVENANCE`. `src/chlide/engines/{base,af3,boltz}.py` puts both folders behind one
+protocol, and `src/chlide/notify.py` vendors telegram.
 
-**Cross-folding an AF3-led campaign now needs an explicit cache.** v8's `boltz_cache` holds one
-component pickle and ZERO checkpoints, so Boltz cannot run from it. `crossfold.py` used to reach
-into v7 via a hardcoded `BOLTZ_DONOR`; it now resolves `--boltz-cache` / `$BOLTZ_CACHE` →
-`<run>/boltz_cache` (only if it has checkpoints) → `~/.boltz`, and **refuses with the list of
-places it looked** rather than folding against an empty cache. For v8 pass
-`--boltz-cache /home/data/yuvaln/nise_bdfp44_v7/boltz_cache`. Note the checkpoints physically live
-in the boltz owner's home (`~yigall/.boltz`) and v7's cache is a tree of symlinks into it, so
-`~/.boltz` is not a reliable fallback for every user. These are canonical **here**;
-`tools/sync_to_campaign.sh` pushes them outward one-way and records the commit in the
-campaign's `TOOLS_PROVENANCE`. Both v7 and v8 are synced and show zero divergence.
+**No unconditional cross-campaign path remains**, enforced by
+`test_no_cross_campaign_paths_in_tools` — which allows an `os.environ.get(VAR, default)`
+(the env var is the interface, the default a convenience), docstrings, and
+`replay_convergence.py`'s declared fixture corpus of finished campaigns, and fails on anything
+else. The guard is itself verified: injecting a module constant makes it fail.
 
-**Never edit a tool inside a campaign directory.** That is how the same script came to
-exist in eight versions and how two stale engine labels shipped (`BUGS.md`, 2025-10-11).
+Env vars that now override hardcoded paths: `BOLTZ_CACHE`, `BOLTZ_PYTHON`, `ROSETTA_PYTHON`,
+`NISE_PATH`, `AF3_RUNNER`, `AF3_RUNNER_PY`, `AF3_PYTHON`, `AF3_MODEL_DIR`, `AF3_DB_DIR`,
+`AF3_SCRIPTS`, `AF3_HOME`, `CHLIDES_MMCIF`, `BOLTZ_REFERENCE_DF`, `COMPARE_CAMPAIGN`.
+
+**Cross-folding an AF3-led campaign needs an explicit cache.** v8's `boltz_cache` holds one
+component pickle and ZERO checkpoints. Pass
+`--boltz-cache /home/data/yuvaln/nise_bdfp44_v7/boltz_cache` or set `$BOLTZ_CACHE`; the tool
+refuses with the list of places it looked rather than folding against an empty cache. The
+checkpoints physically live in the boltz owner's home (`~yigall/.boltz`) and v7's cache is a
+tree of symlinks into it, so `~/.boltz` is not a reliable fallback for every user.
 
 ## Next, in order
 
-1. ~~engine adapters~~ **done** — `src/chlide/engines/{base,af3,boltz}.py`. Both engines
-   satisfy the `Folder` protocol; `get_folder(name)` and `other_engine(name)` resolve
-   `cross_check: auto`. Capability differences are **declared, not hidden**
-   (`supports_chirality_restraints`, `supports_metal_distance_restraint`), and
-   `check_metal_restraint()` makes AF3's refusal structural rather than a comment.
-2. ~~the in-loop pipeline~~ **done** — `harvest_global_top.py`, `relax_pool.py`,
-   `final_shortlist.py`, `rosetta_relax.py`, `burial_rescore.py`.
-3. The ligand build chain: `repair_cla_oxy.py` (278, 2 hardcoded), `build_boltz_ccd.py`,
-   `rebuild_claox_conformer.py`, `build_input_pose.py`, `ligand_chirality.py`.
-4. `calibrate_af3_gates.py`, `recalibrate_gates.py`, `replay_convergence.py`,
-   `relax_replicates.py` — still carry hardcoded paths.
-5. Then the stage modules and `chlide run`.
+1. **The stage modules** — `src/chlide/stages/{ligand,design,fold,relax,cascade,score,report}.py`
+   wrapping the migrated tools, then `loop.py` from the drivers, then `chlide run`. This is the
+   remaining structural work; the tool migration is done.
+2. **Phase 3** — provenance (`run_manifest.json` with git SHA + weights hashes), the JSONL event
+   log, the resume watchdog, `gpu.py`.
+3. Move `make_report`/`sasa_rank`'s `CORE` and `PROPIONATE` atom sets into `LigandConfig`; they
+   are ligand-specific and are module constants today.
 
 **Invariants to preserve while moving these** (each has already cost a bug):
 - `crossfold.py`'s join to the folded output is **positional** (`x{i}` ↔ CSV row *i*; the design

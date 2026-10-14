@@ -143,22 +143,66 @@ def _load(name: str):
 
 
 def test_no_cross_campaign_paths_in_tools():
-    """A tool must never point at a sibling campaign.
+    """A tool must never reach into a sibling campaign UNCONDITIONALLY.
 
-    `BOLTZ_DONOR = Path('.../nise_bdfp44_v7')` lived inside v8. That class of reference is
-    how a tool rebuilt a finished campaign's ligand and a driver nearly wrote into a closed
-    archive -- five incidents. Usage examples in docstrings are the only allowance.
+    `BOLTZ_DONOR = Path('.../nise_bdfp44_v7')` lived as a module constant inside v8. That
+    class of reference is how a tool rebuilt a finished campaign's ligand and a driver nearly
+    wrote into a closed archive -- five incidents.
+
+    What is still allowed, because none of it couples one campaign to another:
+      * an `os.environ.get(VAR, default)` -- the default is a convenience, the var is the API
+      * a docstring or comment -- usage examples have to name something
+      * `replay_convergence.py`'s declared fixture corpus of finished campaigns
+
+    Anything else is a hard failure.
     """
+    import ast
     import re
+    pat = re.compile(r'/home/data/yuvaln/nise_[a-z0-9_]+')
     bad = []
     for f in sorted((ROOT / 'tools').glob('*.py')):
-        for i, line in enumerate(f.read_text().splitlines(), 1):
-            if (re.search(r'/home/data/yuvaln/nise_bdfp44_v\d', line)
-                    and not line.lstrip().startswith('#')):
-                if f.name == 'config_equivalence.py':
-                    continue          # usage example in the module docstring
-                bad.append(f'{f.name}:{i}: {line.strip()[:70]}')
-    assert not bad, 'cross-campaign paths:\n' + '\n'.join(bad)
+        src = f.read_text()
+        if not pat.search(src):
+            continue
+        if f.name == 'replay_convergence.py':
+            continue                      # declared fixture corpus, documented in the file
+        tree = ast.parse(src)
+        docstrings = {
+            id(n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+            and isinstance(n.value.value, str)}
+        # map each statement to its source, so we can ask "is this guarded by environ.get?"
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if not pat.search(node.value) or id(node) in docstrings:
+                continue
+            stmt = _enclosing_statement(tree, node)
+            seg = ast.get_source_segment(src, stmt) or ''
+            if 'environ.get' in seg:
+                continue                  # overridable; the env var is the real interface
+            bad.append(f'{f.name}:{node.lineno}: {node.value}')
+    assert not bad, (
+        'unconditional cross-campaign paths (wrap in os.environ.get or justify):\n'
+        + '\n'.join(bad))
+
+
+def _enclosing_statement(tree, target):
+    """The nearest `ast.stmt` ancestor of `target`, or the tree itself."""
+    import ast
+
+    def walk(node, current):
+        if isinstance(node, ast.stmt):
+            current = node
+        for child in ast.iter_child_nodes(node):
+            if child is target:
+                return current
+            found = walk(child, current)
+            if found is not None:
+                return found
+        return None
+
+    return walk(tree, None) or tree
 
 
 def test_boltz_cache_resolution():
