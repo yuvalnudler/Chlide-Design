@@ -388,6 +388,128 @@ def read_pae(run: Path) -> dict:
     return out
 
 
+def _make_report():
+    """make_report.py holds order_set() and order_reasons(); import rather than reimplement so
+    the Telegram table and the HTML report can never disagree about why a design was picked."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_mr', str(Path(__file__).resolve().parent / 'make_report.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def fig_order_table(run: Path, out: Path) -> Path | None:
+    """The designs picked for synthesis, every measure, and why each one is there.
+
+    This exists because the order set was only ever visible by opening the HTML report. The
+    reasons are generated from each design's standing in the shortlist by make_report's
+    order_reasons(), not written by hand, so they cannot drift from the numbers beside them.
+    Returns None when the campaign has no ORDER directory yet.
+    """
+    try:
+        mr = _make_report()
+        df = mr.load(run)
+        picks, src = mr.order_set(run)
+    except Exception as e:
+        print(f'  order table skipped: {type(e).__name__}: {e}')
+        return None
+    if not picks:
+        return None
+    reasons = mr.order_reasons(df, picks)
+    idx = df.set_index('name')
+
+    cols = [('buns_score_paper', 'BUNs', '{:.0f}', 'lo'),
+            ('buried_frac', 'Lig bur', '{:.0%}', 'hi'),
+            ('buried_frac_core', 'Core bur', '{:.0%}', 'hi'),
+            ('buried_frac_apolar', 'Apolar', '{:.3f}', 'hi'),
+            ('packstat', 'Packstat', '{:.3f}', 'hi'),
+            ('sasa_mg_A2', 'SASA Mg', '{:.1f}', 'lo'),
+            ('ligand_plddt', 'lig pLDDT', '{:.3f}', 'hi'),
+            ('xfold_ligand_plddt', 'x-fold lig', '{:.3f}', 'hi'),
+            ('interface_pae', 'Dimer pAE', '{:.1f}', 'hi'),
+            # His-Mg is a WINDOW (2.0-2.6), not a direction: nothing in it is "best".
+            ('his_mg', 'His-Mg', '{:.2f}', None),
+            ('axial_angle', 'Axial', '{:.1f}', 'lo'),
+            ('his_lonepair_angle', 'LonePair', '{:.1f}', 'lo'),
+            ('mg_imidazole_oop', 'OffImid', '{:.1f}', 'lo')]
+    cols = [c for c in cols if c[0] in df.columns]
+    present = [k for k, _l, _f, _d in cols]
+
+    header = ['#', 'Design'] + [lbl for _k, lbl, _f, _d in cols]
+    body, why, kept = [], [], []
+    for i, nm in enumerate(picks, 1):
+        if nm not in idx.index:
+            continue
+        r = idx.loc[nm]
+        short = nm.replace('_model_0', '')
+        row = [str(i), short]
+        for k, _lbl, fmt, _d in cols:
+            v = r.get(k)
+            row.append(fmt.format(v) if pd.notna(v) else '-')
+        body.append(row)
+        kept.append(nm)
+        why.append(f'{i}. {short} — {reasons.get(nm, "")}')
+    if not body:
+        return None
+
+    # Two stacked axes: a table that keeps its own proportions, and a text block that does not
+    # have to be positioned against it by hand.
+    nrow, nwhy = len(body), len(why)
+    t_h, w_h = 0.52 * (nrow + 1), 0.34 * (nwhy + 3)
+    fig, (ax_t, ax_w) = plt.subplots(
+        2, 1, figsize=(max(15, 1.15 * len(header) + 4), t_h + w_h),
+        gridspec_kw={'height_ratios': [t_h, w_h], 'hspace': 0.08})
+    for ax in (ax_t, ax_w):
+        ax.axis('off')
+
+    # bbox makes the table fill its axes: without it matplotlib leaves a wide margin and the
+    # table floats away from the text block below.
+    tbl = ax_t.table(cellText=body, colLabels=header, cellLoc='center',
+                     loc='center', bbox=[0, 0, 1, 1])
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(10)
+    tbl.auto_set_column_width(col=list(range(len(header))))   # names were being clipped
+    for j, (k, _lbl, _f, direction) in enumerate(cols, start=2):
+        if direction is None:
+            continue
+        vals = [float(idx.loc[n][k]) for n in kept if pd.notna(idx.loc[n].get(k))]
+        if not vals:
+            continue
+        target = min(vals) if direction == 'lo' else max(vals)
+        for i2, n in enumerate(kept, start=1):
+            v = idx.loc[n].get(k)
+            if pd.notna(v) and float(v) == target:
+                tbl[(i2, j)].set_facecolor('#d8f0d8')
+    for j in range(len(header)):
+        tbl[(0, j)].set_facecolor('#e8e8e8')
+        tbl[(0, j)].set_text_props(weight='bold')
+    for i2 in range(1, nrow + 1):
+        tbl[(i2, 1)].set_text_props(ha='left')
+
+    ax_w.text(0, 1.0, 'Why each design is in the set '
+                      '(top-decile standing in the shortlist, generated from the numbers):',
+              transform=ax_w.transAxes, fontsize=10.5, weight='bold', va='top')
+    step = 1.0 / (nwhy + 3)
+    for n_i, line in enumerate(why):
+        ax_w.text(0, 1.0 - step * (n_i + 1.25), line, transform=ax_w.transAxes,
+                  fontsize=9.5, va='top')
+    note = 'Green = best in the set for that column; His-Mg has none because 2.0-2.6 A is a window, not a direction.'
+    geom = [l for k, l, _f, _d in cols if k in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop')]
+    if geom:
+        note += (f'  {" / ".join(geom)} are coordination geometry in degrees, 0 = ideal; they are '
+                 'REPORTED, not part of the ranking (docs/CALIBRATION.md).')
+    ax_w.text(0, 1.0 - step * (nwhy + 2.0), note, transform=ax_w.transAxes,
+              fontsize=8.5, va='top', style='italic', color='#444444', wrap=True)
+
+    ax_t.set_title(f'{run.name} — suggested order set ({len(body)} designs, from {src})',
+                   fontsize=13, weight='bold', loc='left')
+    p_out = out / '7_order_set.png'
+    fig.savefig(p_out, dpi=135, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    return p_out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--run-dir', type=Path, required=True)
@@ -413,6 +535,7 @@ def main() -> int:
         fig_metal(casc, out, eng),
         fig_shortlist(casc, pae, out),
         fig_dimer(read_dimer(a.run_dir), out),
+        fig_order_table(a.run_dir, out),
     ) if f]
     print(f'{len(figs)} figures in {out}')
     for f in figs:
@@ -453,6 +576,31 @@ def main() -> int:
                           f'(high pAE = unlikely to aggregate)']
         else:
             lines += ['', '<i>AF3 interface pAE not yet run</i>']
+        # The order set also goes in as TEXT: the table figure is the readable form, but an
+        # image cannot be copied out of Telegram and these names get pasted into other tools.
+        try:
+            mr = _make_report()
+            picks, src = mr.order_set(a.run_dir)
+            if picks:
+                sdf = mr.load(a.run_dir)
+                why = mr.order_reasons(sdf, picks)
+                sidx = sdf.set_index('name')
+                lines += ['', f'<b>Suggested order set</b> ({len(picks)} designs, {src})']
+                for i, nm in enumerate(picks, 1):
+                    if nm not in sidx.index:
+                        continue
+                    r = sidx.loc[nm]
+                    bits = []
+                    for k, lbl, fmt in (('buns_score_paper', 'BUNs', '{:.0f}'),
+                                        ('packstat', 'packstat', '{:.3f}'),
+                                        ('interface_pae', 'pAE', '{:.1f}')):
+                        if k in sidx.columns and pd.notna(r.get(k)):
+                            bits.append(f'{lbl} {fmt.format(r[k])}')
+                    lines.append(f'  {i}. <code>{nm.replace("_model_0", "")}</code> — '
+                                 f'{", ".join(bits)}')
+                    lines.append(f'      <i>{why.get(nm, "")}</i>')
+        except Exception as e:
+            print(f'  order set text skipped: {type(e).__name__}: {e}')
         ok = telegram.send_message('\n'.join(lines))
         print('telegram message:', ok)
         if ok and figs:

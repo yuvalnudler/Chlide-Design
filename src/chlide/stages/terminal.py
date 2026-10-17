@@ -111,6 +111,17 @@ _SASA = Stage(
     optional=True,
 )
 
+_ORDER_SET = Stage(
+    name='order_set',
+    tool='order_set',
+    args=('--n', '8'),
+    # Runs BEFORE the report and the figures: both render the order section only when the
+    # ORDER directory exists, which is why v8's had to be assembled by hand.
+    reads=('results/final/shortlist.csv', 'results/final/top*.pdb'),
+    writes=('results/final/ORDER',),
+    optional=True,
+)
+
 _REPORT = Stage(
     name='report',
     tool='make_report',
@@ -130,7 +141,7 @@ _FIGURES = Stage(
 )
 
 ORDER = [_RELAX, _HARVEST, _CASCADE, _DIMER, _SHORTLIST, _FOLD_CHECK,
-         _BURIAL, _REBUILD, _SASA, _REPORT, _FIGURES]
+         _BURIAL, _REBUILD, _SASA, _ORDER_SET, _REPORT, _FIGURES]
 
 
 def terminal_stages(fold_engine: str) -> list[Stage]:

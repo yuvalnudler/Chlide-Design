@@ -186,6 +186,9 @@ say "SASA ranking"
 # --- 8. figures and the final Telegram report -----------------------------------------------
 # Easy to forget, and the reporter is already dead by this point (step 2 kills it before any
 # result exists), so without this the campaign finishes silently and produces no plots.
+say "picking the order set (top 8, de-duplicated)"
+"$PY" tools/order_set.py --run-dir "$RUN" --n 8 || say "NOTE: order set not written (see above)"
+
 say "joined HTML report (all measures, sortable)"
 "$PY" tools/make_report.py --run-dir "$RUN" || say "WARNING: report returned non-zero"
 say "figures + final Telegram report"
