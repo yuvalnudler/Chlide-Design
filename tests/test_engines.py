@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -333,3 +334,39 @@ def test_no_tool_silently_guesses_the_run_directory():
         if 'CHLIDE_RUN_DIR' not in ctx:
             real.append(loc)
     assert not real, f'tools guessing the run directory without $CHLIDE_RUN_DIR: {real}'
+
+
+def test_finish_at_iter_detects_the_engine_from_the_manifest(tmp_path):
+    """Which model led decides which one cross-checks. Get it wrong and the campaign grades
+    itself -- the one thing the fold check exists to prevent.
+
+    The old test grepped "$RUN"/run_nise_*.py, a per-campaign driver script that repo-based
+    campaigns do not have, so it fell through to "Boltz" for all of them. v9 happened to be
+    Boltz-led so it got the right stage by luck; an AF3-led campaign would have been
+    cross-checked with AF3.
+    """
+    import json
+    import subprocess
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'finish_at_iter.sh'
+    if not sh.is_file():
+        pytest.skip('finish_at_iter.sh not migrated')
+    body = sh.read_text()
+    start = body.index('detect_engine() {')
+    end = body.index('\n}', start) + 2
+    fn = f'PY={sys.executable}\n' + body[start:end]
+
+    def detect(d: Path) -> str:
+        r = subprocess.run(['bash', '-c', fn + f'\ndetect_engine "{d}"'],
+                           capture_output=True, text=True)
+        return r.stdout.strip()
+
+    af3 = tmp_path / 'af3led'; af3.mkdir()
+    (af3 / 'run_manifest.json').write_text(json.dumps({'engine': {'fold': 'af3'}}))
+    assert detect(af3) == 'AF3'
+
+    boltz = tmp_path / 'boltzled'; boltz.mkdir()
+    (boltz / 'run_manifest.json').write_text(json.dumps({'engine': {'fold': 'boltz'}}))
+    assert detect(boltz) == 'Boltz'
+
+    bare = tmp_path / 'bare'; bare.mkdir()
+    assert detect(bare) == 'Boltz', 'no manifest and no driver must fall back, not crash'

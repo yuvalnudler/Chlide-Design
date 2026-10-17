@@ -161,7 +161,31 @@ say "final shortlist"
 #   fold   engine-DEPENDENT. A campaign optimises its own folder's confidence, so that folder
 #          cannot also be the check. Boltz-led -> check with AF3. AF3-led -> check with Boltz.
 #          Running af3_monomer.py on an AF3 campaign grades the exam with the model that sat it.
-_ENGINE=$(grep -lq 'from af3_adapter import' "$RUN"/run_nise_*.py 2>/dev/null && echo AF3 || echo Boltz)
+# Which model LED the campaign decides which one cross-checks it. Get this wrong and the
+# campaign grades itself, which is the one thing the fold check exists to prevent.
+# The old test grepped "$RUN"/run_nise_*.py -- a per-campaign driver script that repo-based
+# campaigns do not have at all, so it silently fell through to "Boltz" for every one of them.
+# v9 happened to be Boltz-led; an AF3-led campaign would have been cross-checked with AF3.
+detect_engine() {
+  local e
+  e=$("$PY" -c '
+import json, sys
+from pathlib import Path
+try:
+    d = json.loads((Path(sys.argv[1]) / "run_manifest.json").read_text())
+except Exception:
+    sys.exit(1)
+e = d.get("engine") or {}
+f = (e.get("fold") if isinstance(e, dict) else e) or ""
+print("AF3" if str(f).lower().startswith("af3") else ("Boltz" if f else ""))
+' "$1" 2>/dev/null)
+  if [ -n "$e" ]; then
+    echo "$e"; return 0
+  fi
+  # legacy campaign: a per-campaign driver script sits beside the data
+  grep -lq 'from af3_adapter import' "$1"/run_nise_*.py 2>/dev/null && echo AF3 || echo Boltz
+}
+_ENGINE=$(detect_engine "$RUN")
 say "fold check: campaign engine is ${_ENGINE}, cross-checking with the other model"
 if [ "$_ENGINE" = "AF3" ]; then
   "$PY" tools/crossfold.py --run-dir "$RUN" --top 25 --mode complex --devices 0,1,2,3 \
