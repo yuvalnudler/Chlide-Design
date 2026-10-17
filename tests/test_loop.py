@@ -332,3 +332,65 @@ def test_autostop_flag_reaches_the_driver():
     assert "CONVERGENCE_AUTOSTOP = os.environ.get('CHLIDE_CONVERGENCE_AUTOSTOP', '1') == '1'" in drv
     # the metric must still be computed when the halt is suppressed
     assert 'return False, cs' in drv
+
+
+# ------------------------------------------------------------------ relax pool watcher
+
+def test_relax_watcher_script_exists_and_refuses_non_campaign_dirs(tmp_path):
+    """The pool must be relaxed DURING the run. v8 did it that way and caught up in six
+    minutes; v9 had no watcher and harvested 12,972 unrelaxed designs in one block.
+
+    The repo has an input/ directory of its own, so an early version of the guard accepted
+    the REPO as a run directory and started relaxing against it. The marker has to be
+    something only a real campaign has.
+    """
+    import subprocess
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'relax_watcher.sh'
+    assert sh.is_file(), 'relax_watcher.sh was never migrated; that is the v9 regression'
+
+    def run(*args):
+        return subprocess.run(['bash', str(sh), *args], capture_output=True, text=True,
+                              timeout=30)
+
+    assert run().returncode != 0
+    repo = sh.parent.parent
+    r = run('--run-dir', str(repo))
+    assert r.returncode != 0, 'the repo is not a campaign, even though it has input/'
+    assert 'sampling_dataframes' in r.stderr
+    assert run('--run-dir', str(tmp_path / 'nope')).returncode != 0
+
+
+def test_relax_watcher_exits_instead_of_spinning_when_relax_pool_keeps_failing(tmp_path):
+    """The drain path skips its sleep on purpose, so a relax_pool that fails every time would
+    busy-loop a core. Bounded at five consecutive failures."""
+    import subprocess
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'relax_watcher.sh'
+    if not sh.is_file():
+        pytest.skip('relax_watcher.sh not migrated')
+    run_dir = tmp_path / 'camp'
+    (run_dir / 'input' / 'sampling_dataframes').mkdir(parents=True)
+    r = subprocess.run(
+        ['bash', str(sh), '--run-dir', str(run_dir), '--parent-pid', '1', '--interval', '1'],
+        capture_output=True, text=True, timeout=90)
+    assert r.returncode != 0
+    assert 'exiting rather than spinning' in r.stdout
+
+
+def test_watcher_is_configurable_and_defaults_on():
+    """Default on: the work happens either way, only the timing differs."""
+    from chlide.config import load_campaign
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_campaign(root / 'campaigns' / 'v9-boltz-pbind.yaml')
+    assert cfg.compute.relax_pool_watcher is True
+    assert cfg.compute.relax_pool_interval >= 30
+    assert cfg.compute.relax_pool_workers >= 1
+
+
+def test_disabled_watcher_starts_nothing():
+    from types import SimpleNamespace
+    from chlide.loop import _start_relax_watcher
+    events = []
+    log = SimpleNamespace(emit=lambda **kw: events.append(kw))
+    cfg = SimpleNamespace(compute=SimpleNamespace(relax_pool_watcher=False))
+    assert _start_relax_watcher(cfg, Path('/tmp'), log) is None
+    assert events and events[0]['event'] == 'relax_watcher_disabled'

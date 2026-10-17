@@ -278,6 +278,23 @@ class ComputeConfig(_Base):
                     "our own collapsed the pool to 4 workers and a 14 h cascade.")
     relax_workers: int = Field(default=12, ge=1)
     relax_timeout: int = Field(default=1800, gt=0)
+    relax_pool_watcher: bool = Field(
+        default=True,
+        description="Relax the design pool DURING the run instead of all at once at the end. "
+                    "The in-loop relax only touches top_backbones*4 designs, enough to gate "
+                    "promotion; everything else still has to be minimised before the cascade "
+                    "can score it. v8 ran this and its harvest caught up in six minutes; v9 "
+                    "did not and harvested 12,972 unrelaxed designs. Default on, because the "
+                    "cost is the same either way and only the timing differs.")
+    relax_pool_interval: int = Field(
+        default=600, ge=30,
+        description='seconds between pool passes; relax_pool is incremental, so a missed '
+                    'poll costs nothing')
+    relax_pool_workers: int = Field(
+        default=12, ge=1,
+        description="Kept well under the box. This must never starve the driver's in-loop "
+                    "relax, which times out at relax_timeout and then silently ranks on "
+                    "UNRELAXED structures -- changing the trajectory for a background job.")
 
 
 # --------------------------------------------------------------------------- top

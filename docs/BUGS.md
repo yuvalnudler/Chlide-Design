@@ -136,6 +136,21 @@ while someone is waiting for it.
 it just moves the cost to the worst possible moment. The migration checked that every *tool*
 came across; it did not check that everything the old launcher *started* came across.
 
-**Fix (not yet applied):** start the pool watcher from `src/chlide/loop.py` when
-`relax.pool_watcher` is enabled, defaulting on, and have the harvest report how much of the
-pool was already done so a silent regression is visible in the log. Must land before v9b/v10.
+**Fix (applied 2026-10-17):** `tools/relax_watcher.sh` is migrated — it existed in v7 and v8
+and the migration simply never took it — and `chlide run` starts it, controlled by
+`compute.relax_pool_watcher` (default on). Three bugs were fixed in the port, all of which the
+original would have reproduced in the repo: it derived the run dir from its own location, it
+grepped `run_nise_*.py` for the driver (absent in repo campaigns, leaving the pattern empty so
+`pgrep -f ""` matched everything and it could never tell the campaign had ended), and it
+invoked `tools/relax_pool.py` relatively after `cd`-ing into the run dir.
+
+Two more found while porting:
+
+* the first guard tested `-d "$RUN/input"`, and the **repo has an `input/`**, so pointing it at
+  the repo was accepted and it began relaxing against it. Now tests `input/sampling_dataframes`.
+* the drain path skips its sleep on purpose, so a `relax_pool` that fails every time busy-looped
+  a core. Bounded at five consecutive failures.
+
+Still to do: have the harvest log how much of the pool was already relaxed, so a watcher that
+silently did not run is visible without counting files. Deferred only because `finish_at_iter.sh`
+was mid-execution on v9's harvest.

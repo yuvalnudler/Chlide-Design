@@ -17,6 +17,7 @@ turn it.
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -154,6 +155,54 @@ def _boltz_executable() -> str:
     return f'{py} {patch}'
 
 
+def _start_relax_watcher(cfg: CampaignConfig, run_dir: Path, log) -> subprocess.Popen | None:
+    """Relax the pool DURING the run, so the harvest does not inherit the whole backlog.
+
+    v8 had this running beside it and caught up in six minutes; v9 did not, and harvested
+    12,972 unrelaxed designs in one block. The migration moved every tool but never moved
+    what the old launcher STARTED -- nothing failed, the cost just moved to the end. See
+    docs/BUGS.md.
+
+    Detached into its own session so a Ctrl-C aimed at the driver does not also kill it
+    mid-relax, and handed our pid so it can tell when the campaign is over: the driver runs
+    IN-PROCESS here, so there is no separate driver process for it to look for.
+    """
+    if not cfg.compute.relax_pool_watcher:
+        log.emit(event='relax_watcher_disabled')
+        return None
+    tool = Path(__file__).resolve().parent.parent.parent / 'tools' / 'relax_watcher.sh'
+    if not tool.is_file():
+        log.emit(event='relax_watcher_missing', tool=str(tool))
+        print(f'  WARNING: {tool} not found; the pool will be relaxed at harvest instead')
+        return None
+    logfile = run_dir / 'logs' / 'relax_watcher.log'
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ['bash', str(tool), '--run-dir', str(run_dir), '--parent-pid', str(os.getpid()),
+           '--workers', str(cfg.compute.relax_pool_workers),
+           '--interval', str(cfg.compute.relax_pool_interval)]
+    fh = logfile.open('a')
+    proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    log.emit(event='relax_watcher_start', pid=proc.pid,
+             workers=cfg.compute.relax_pool_workers,
+             interval=cfg.compute.relax_pool_interval, log=str(logfile))
+    print(f'  relax watcher pid {proc.pid} -> {logfile}')
+    return proc
+
+
+def _stop_relax_watcher(proc, log) -> None:
+    """Ask it to stop, then insist. It exits on its own once the campaign is gone and the pool
+    is drained, but a driver that raised should not leave it running against a dead run."""
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    log.emit(event='relax_watcher_stop', pid=proc.pid, returncode=proc.poll())
+
+
 def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | None = None,
                  debug: bool = False, allow_foreign_gpu: bool = False,
                  dry_run: bool = False) -> int:
@@ -213,19 +262,26 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
              objective=cfg.loop.objective, manifest=str(manifest))
     print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
 
-    with GpuLock(list(cfg.engine.devices)):
-        from chlide import nise_driver
-        if nise_driver.FOLD_ENGINE != cfg.engine.fold:
-            raise RuntimeError(
-                f'driver imported with FOLD_ENGINE={nise_driver.FOLD_ENGINE!r} but the '
-                f'campaign asks for {cfg.engine.fold!r}. The driver reads it at import time, '
-                f'so it must not be imported before this point.')
-        t0 = time.time()
-        try:
-            nise_driver.main(**params)
-        except BaseException as e:               # includes KeyboardInterrupt / SIGTERM paths
-            log.emit(event='run_failed', error=f'{type(e).__name__}: {e}',
-                     seconds=round(time.time() - t0, 1))
-            raise
+    watcher = _start_relax_watcher(cfg, run_dir, log)
+    t0 = time.time()
+    try:
+        with GpuLock(list(cfg.engine.devices)):
+            from chlide import nise_driver
+            if nise_driver.FOLD_ENGINE != cfg.engine.fold:
+                raise RuntimeError(
+                    f'driver imported with FOLD_ENGINE={nise_driver.FOLD_ENGINE!r} but the '
+                    f'campaign asks for {cfg.engine.fold!r}. The driver reads it at import '
+                    f'time, so it must not be imported before this point.')
+            t0 = time.time()
+            try:
+                nise_driver.main(**params)
+            except BaseException as e:           # includes KeyboardInterrupt / SIGTERM paths
+                log.emit(event='run_failed', error=f'{type(e).__name__}: {e}',
+                         seconds=round(time.time() - t0, 1))
+                raise
+    finally:
+        # Always, including the GpuLock refusing and the driver raising: a watcher left
+        # running against a dead campaign keeps eating cores until someone notices.
+        _stop_relax_watcher(watcher, log)
     log.emit(event='run_end', seconds=round(time.time() - t0, 1))
     return 0
