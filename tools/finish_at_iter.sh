@@ -45,7 +45,9 @@ if [ -z "${WORKERS:-}" ]; then
   # Size from OTHER users' load, not total: counting our own collapses this to the floor.
   _others=$(ps -eo user,pcpu --no-headers | awk -v me="$USER" '$1!=me {s+=$2} END {printf "%d", s/100}')
   _free=$(( $(nproc) - _others - RESERVE ))
-  WORKERS=$(( _free < 4 ? 4 : (_free > 48 ? 48 : _free) ))
+  # Hard ceiling 32: Yigal's standing limit on this box, independent of how idle it looks.
+  # The old cap was 48, which on a quiet box asked for 35 and would have broken it.
+  WORKERS=$(( _free < 4 ? 4 : (_free > 32 ? 32 : _free) ))
   echo "[cpu] $(nproc) cores, other users using ${_others}, reserving ${RESERVE}, taking ${WORKERS} workers"
 fi
 AF3_TOP=${AF3_TOP:-200}
