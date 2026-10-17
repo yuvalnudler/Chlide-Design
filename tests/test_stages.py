@@ -165,7 +165,10 @@ def test_encoded_order_matches_finish_at_iter_sh():
     sh = Path(__file__).resolve().parents[1] / 'tools' / 'finish_at_iter.sh'
     if not sh.is_file():
         pytest.skip('finish_at_iter.sh not migrated')
-    seen = [m for m in re.findall(r'tools/([a-z0-9_]+)\.py', sh.read_text())]
+    # Only real invocations. Comments and `say` hints also name tools (the GPU stages print a
+    # copy-pasteable rerun command when they skip) and are not part of the executed order.
+    lines = [l for l in sh.read_text().splitlines() if not re.match(r'\s*(#|say\b)', l)]
+    seen = re.findall(r'tools/([a-z0-9_]+)\.py', '\n'.join(lines))
     # collapse the two engine branches into one position
     collapsed, skip_next = [], False
     for i, t in enumerate(seen):

@@ -54,6 +54,40 @@ AF3_TOP=${AF3_TOP:-200}
 cd "$RUN" || exit 1
 say(){ printf '\n[%s] %s\n' "$(date +%F' '%H:%M:%S)" "$*"; }
 
+# GPU stages run BY DEFAULT. v8's harvest skipped both because NISE_ALLOW_GPU was unset, and
+# they had to be run by hand a day later -- the shortlist sat without its dimer pAE until then.
+# The gate is now on whether the cards are actually free, not on remembering a variable.
+#   NISE_ALLOW_GPU=0  force skip        NISE_ALLOW_GPU=1  force run (skip the check)
+#   GPU_FREE_MIB      per-card idle allowance, default 2000
+gpus_free() {
+  case "${NISE_ALLOW_GPU:-auto}" in
+    0) say "GPU stage SKIPPED -- NISE_ALLOW_GPU=0"; return 1 ;;
+    1) say "GPU stage FORCED on -- NISE_ALLOW_GPU=1, availability check bypassed"; return 0 ;;
+  esac
+  command -v nvidia-smi >/dev/null 2>&1 || { say "GPU stage SKIPPED -- no nvidia-smi"; return 1; }
+  # Anyone else's compute process means the cards are theirs. Never contend: this box is shared
+  # and has been taken over mid-run before.
+  local foreign busy
+  foreign=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null |
+            while read -r pid; do
+              [ -n "$pid" ] || continue
+              [ "$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')" != "$USER" ] && echo x
+            done | wc -l)
+  if [ "${foreign:-0}" -gt 0 ]; then
+    say "GPU stage SKIPPED -- ${foreign} compute process(es) from another user on the cards"
+    return 1
+  fi
+  # nvidia-smi cannot always resolve other users' PIDs, so also require the cards to be idle.
+  busy=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null |
+         awk -v lim="${GPU_FREE_MIB:-2000}" '$1 > lim {n++} END {print n+0}')
+  if [ "${busy:-1}" -gt 0 ]; then
+    say "GPU stage SKIPPED -- ${busy} card(s) still hold >${GPU_FREE_MIB:-2000} MiB"
+    return 1
+  fi
+  say "GPUs idle and unowned -- running GPU stage"
+  return 0
+}
+
 PKL="input/sampling_dataframes/iter_${STOP_AT}_data.pkl"
 QUE="input/sampled_backbones/iter_${STOP_AT}/backbone_queue.txt"
 
@@ -98,11 +132,12 @@ nice -n5 "$RPY" tools/polizzi_cascade.py --run-dir "$RUN" --from-metrics --pre-r
 
 # --- 6. AF3 aggregation proxy, the only GPU step ------------------------------------------------
 say "AF3 two-copy interface pAE, top ${AF3_TOP} by BUNs (GPU, ~1.2 h)"
-if [ "${NISE_ALLOW_GPU:-0}" != "1" ]; then
-  say "SKIPPING GPU stage -- trumpeldor is shared and NISE_ALLOW_GPU is not set"
-else
+if gpus_free; then
   "$PY" tools/af3_interface_pae.py --run-dir "$RUN" --top "$AF3_TOP" --devices 0,1,2,3 \
      || say "WARNING: AF3 stage returned non-zero"
+else
+  say "  run it later with:  $PY tools/af3_interface_pae.py --run-dir $RUN --top $AF3_TOP --devices 0,1,2,3"
+  say "  then re-run the shortlist rebuild so interface_pae enters the ranking."
 fi
 say "GPUs now free for good: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader | tr '\n' ' ')"
 
@@ -133,11 +168,11 @@ if [ "$_ENGINE" = "AF3" ]; then
        || say "WARNING: Boltz cross-fold returned non-zero"
 else
 say "AF3 monomer fold confidence, top 25 (GPU, ~5 min)"
-if [ "${NISE_ALLOW_GPU:-0}" != "1" ]; then
-  say "SKIPPING GPU stage -- trumpeldor is shared and NISE_ALLOW_GPU is not set"
-else
+if gpus_free; then
   "$PY" -u tools/af3_monomer.py --run-dir "$RUN" --top 25 --devices 0,1,2,3 \
      || say "WARNING: AF3 monomer stage returned non-zero"
+else
+  say "  run it later with:  $PY -u tools/af3_monomer.py --run-dir $RUN --top 25 --devices 0,1,2,3"
 fi
 fi
 
