@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from chlide.stages.base import Outcome, OrderError, Stage, StageResult, summarise, validate_order
@@ -178,3 +181,46 @@ def test_encoded_order_matches_finish_at_iter_sh():
     assert collapsed == encoded, (
         'the shell script and the encoded ORDER have drifted:\n'
         f'  shell:   {collapsed}\n  encoded: {encoded}')
+
+
+def test_declared_reads_are_actually_read_by_the_tool():
+    """A `reads` declaration that no code performs is worse than none: it reads as a guarantee.
+
+    `_REBUILD` declared results/final/shortlist_burial.csv for months while
+    final_shortlist.py never opened it, so burial_rescore's columns were computed and then
+    silently dropped -- absent from v8's shortlist.csv despite the stage order being "right".
+    validate_order() cannot catch this: it only checks an earlier stage WRITES the path.
+    """
+    from chlide.stages.terminal import ORDER
+    tools = Path(__file__).resolve().parents[1] / 'tools'
+    missing = []
+    for stage in ORDER:
+        src_path = tools / f'{stage.tool}.py'
+        if not src_path.is_file():
+            continue
+        src = src_path.read_text()
+        for art in stage.reads:
+            # Only concrete filenames. A glob like iter_*/.../*_model_0.pdb is assembled from
+            # parts at runtime and never appears literally, which is not the bug being guarded.
+            if '*' in art:
+                continue
+            if Path(art).name not in src:
+                missing.append(f'{stage.name} declares reads={art!r} but {stage.tool}.py never names it')
+    assert not missing, '\n'.join(missing)
+
+
+def test_finish_at_iter_requires_an_explicit_run_dir():
+    """It lives in the shared repo now, so inferring the run dir from its own location pointed
+    it at the repo. Two watchers sat 2d20h waiting on a path that could never appear, and v9's
+    auto-harvest silently never fired. It must refuse rather than guess."""
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'finish_at_iter.sh'
+    if not sh.is_file():
+        pytest.skip('finish_at_iter.sh not migrated')
+    repo = sh.parent.parent
+    no_dir = subprocess.run(['bash', str(sh), '1'], capture_output=True, text=True)
+    assert no_dir.returncode != 0 and 'no run directory' in no_dir.stderr
+
+    not_a_run = subprocess.run(['bash', str(sh), '1', '--run-dir', str(repo)],
+                               capture_output=True, text=True)
+    assert not_a_run.returncode != 0, 'the repo is not a campaign; it must fail fast'
+    assert 'not a campaign run directory' in not_a_run.stderr

@@ -105,6 +105,18 @@ def main() -> int:
         pae['interface_pae'] = pd.to_numeric(pae['interface_pae'], errors='coerce')
         casc = casc.merge(pae[['key', 'interface_pae']].drop_duplicates('key'), on='key', how='left')
 
+    # burial_rescore.py runs before the rebuild and writes columns the cascade cannot produce.
+    # Until this merge existed they were written to shortlist_burial.csv and then dropped on the
+    # floor -- the stage declared the read, but no code performed it.
+    bur = read_csv(R / 'results' / 'final' / 'shortlist_burial.csv')
+    if bur is not None and 'name' in bur:
+        bur['key'] = bur['name'].str.replace(r'_(model_0|min)$', '', regex=True)
+        bcols = [c for c in ('frac_apolar_hull', 'frac_apolar_a9', 'core_in_a9', 'mg_in_a9')
+                 if c in bur]
+        if bcols:
+            casc = casc.merge(bur[['key'] + bcols].drop_duplicates('key'), on='key', how='left',
+                              suffixes=('', '_bur'))
+
     stages = {
         'minimised': casc['his_mg'].notna(),
         f'His-Mg {COORD_LO}-{COORD_HI} A': casc['his_mg'].between(COORD_LO, COORD_HI),
@@ -169,7 +181,10 @@ def main() -> int:
     cols = [c for c in ('name', 'iteration', 'buns_score_paper', 'composite',
                         'buns_combined', 'buns_ligand', 'buns_protein',
                         'buried_frac', 'buried_frac_core', 'buried_frac_apolar', 'sasa_mg_A2',
-                        'frac_apolar_hull', 'mg_in_a9', 'ligand_is_buried',
+                        'frac_apolar_hull', 'frac_apolar_a9', 'core_in_a9', 'mg_in_a9',
+                        'ligand_is_buried',
+                        'axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+                        'mg_out_of_plane', 'n4_planarity',
                         'packstat', 'apo_clashes', 'buried_charged', 'his_mg', 'his_mg_before',
                         'score', 'ca_rmsd_to_min', 'lig_rmsd_to_min', 'ligand_plddt',
                         'protein_plddt', 'iptm', 'ligand_rmsd', 'protein_rmsd', 'laser_bs_nll',

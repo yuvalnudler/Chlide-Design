@@ -224,3 +224,54 @@ def test_cascade_loads_sasa_from_its_own_directory():
     shortlist and the top-25 detail table stop agreeing and nothing says so."""
     src = (ROOT / 'tools' / 'polizzi_cascade.py').read_text()
     assert "Path(__file__).parent / 'sasa_rank.py'" in src
+
+
+# ------------------------------------------------------------------ coordination geometry
+
+GEOM_HEADERS = ('Axial angle', 'Lone-pair ang', 'Mg off-imid')
+
+
+def test_geometry_columns_absent_do_not_break_the_report(v8_html):
+    """Backward compatibility: a campaign whose cascade predates these columns still renders.
+
+    make_report drops any COLS key missing from the dataframe, so the only thing to assert is
+    that the render succeeded (the fixture would have raised) and nothing half-rendered.
+    """
+    h = _headers(v8_html)
+    assert 'His-Mg' in h, 'the report lost its existing coordination column'
+
+
+def test_geometry_columns_render_when_present(tmp_path):
+    """The other half: when the cascade HAS supplied them, they reach the HTML.
+
+    Built from a minimal run dir rather than a campaign, so this runs without the archives.
+    """
+    run = tmp_path / 'run'
+    (run / 'results' / 'final').mkdir(parents=True)
+    (run / 'results' / 'cascade').mkdir(parents=True)
+    # the funnel tiles read this; without it make_report raises IndexError on an empty funnel
+    (run / 'results' / 'cascade' / 'cascade_metrics.csv').write_text(
+        'name,packstat,apo_clashes,buried_charged\n'
+        'iter1_chunk_0_seq_1_model_0,0.66,0,0\n'
+        'iter2_chunk_0_seq_2_model_0,0.61,0,0\n')
+    (run / 'results' / 'final' / 'shortlist.csv').write_text(
+        '# minimal fixture\n'
+        'name,iteration,buns_score_paper,buns_ligand,buns_protein,packstat,his_mg,'
+        'buried_frac,buried_frac_core,'
+        'axial_angle,his_lonepair_angle,mg_imidazole_oop,sequence,output\n'
+        'iter1_chunk_0_seq_1_model_0,1,6,0,6,0.66,2.43,0.71,0.88,5.6,16.0,14.5,ACDE,o.pdb\n'
+        'iter2_chunk_0_seq_2_model_0,2,8,0,8,0.61,2.45,0.68,0.85,9.1,31.2,28.4,FGHI,o2.pdb\n')
+    html = _render(run, tmp_path / 'out.html')
+    h = _headers(html)
+    for col in GEOM_HEADERS:
+        assert col in h, f'{col} missing from the report'
+
+
+def test_geometry_is_advisory_not_a_ranking_term():
+    """These measures must NOT enter `composite`. Nothing shows they predict binding, and the
+    paper's Fig 1c is a warning about adopting such a term as an objective; promoting them
+    would silently change which designs get ordered."""
+    src = (ROOT / 'tools' / 'final_shortlist.py').read_text()
+    components = src[src.index('COMPONENTS'):src.index('COMPONENTS') + 400]
+    for col in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop'):
+        assert col not in components, f'{col} leaked into the composite ranking'

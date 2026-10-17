@@ -13,13 +13,33 @@
 #   4. The cascade is CPU-only. GPUs are free from step 2 onward; AF3 in step 6 is the only thing
 #      that needs them back.
 #
-# Usage: nohup bash tools/finish_at_iter.sh 16 > logs/finish.log 2>&1 &
+# Usage: nohup bash tools/finish_at_iter.sh 16 --run-dir /path/to/campaign > finish.log 2>&1 &
+#        (or export CHLIDE_RUN_DIR). This script lives in the SHARED repo, so it cannot infer the
+#        campaign from its own location -- it used to, which silently pointed it at the repo and
+#        left it waiting forever on a path that could never appear.
 set -u
-RUN=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-DRIVER=$(cd "$RUN" && ls run_nise_*.py | head -1)   # derived: a literal here pkills the WRONG campaign
 PY=/home/yigall/mambaforge/envs/lasermpnn/bin/python
 RPY=/home/yigall/mambaforge/envs/Rosetta/bin/python
-STOP_AT=${1:?usage: finish_at_iter.sh <iteration>}
+STOP_AT=${1:?usage: finish_at_iter.sh <iteration> [--run-dir DIR]}
+shift
+RUN=${CHLIDE_RUN_DIR:-}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --run-dir) RUN=${2:?--run-dir needs a path}; shift 2 ;;
+    *) echo "[fatal] unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$RUN" ] || { echo "[fatal] no run directory: pass --run-dir DIR or set CHLIDE_RUN_DIR" >&2; exit 2; }
+RUN=$(cd "$RUN" 2>/dev/null && pwd) || { echo "[fatal] run dir does not exist: $RUN" >&2; exit 2; }
+# Fail fast instead of sleeping forever on an iteration file that cannot appear.
+[ -d "$RUN/input/sampling_dataframes" ] || {
+  echo "[fatal] $RUN is not a campaign run directory (no input/sampling_dataframes/)" >&2; exit 2; }
+# One harvest per run dir. Two watchers running the terminal pipeline at once corrupts results/.
+exec 9>"$RUN/.harvest.lock" || { echo "[fatal] cannot open $RUN/.harvest.lock" >&2; exit 2; }
+flock -n 9 || { echo "[fatal] another harvest already holds $RUN/.harvest.lock -- refusing" >&2; exit 3; }
+# Scoped to THIS campaign. An unscoped -- or empty -- pattern pkills every other run on the box.
+DRIVER="chlide\.cli run .*--out ${RUN}([[:space:]]|/|$)"
+pgrep -f "$DRIVER" >/dev/null 2>&1 || echo "[warn] no live driver for this campaign; harvesting what is on disk"
 RESERVE=${RESERVE:-16}   # cores always left free for other users on this shared box
 if [ -z "${WORKERS:-}" ]; then
   # Size from OTHER users' load, not total: counting our own collapses this to the floor.

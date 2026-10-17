@@ -89,6 +89,18 @@ def _kabsch(P, Q):
     return R, qc - R @ pc
 
 
+def _coordination_geometry(pose, his_index: int, li: int, mg_i: int) -> dict:
+    """Axial coordination quality, from tools/metal_geometry.py so the maths lives in one place
+    (same reason _sasa_of defers to sasa_rank.py). Reported and flagged, never ranked -- see
+    that module's docstring for why, and for what each column means."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_mg', str(Path(__file__).parent / 'metal_geometry.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.from_pose(pose, his_index, li, mg_i)
+
+
 def _sasa_of(pdb_path) -> dict:
     """Shrake-Rupley ligand burial, from tools/sasa_rank.py so the constants live in one place."""
     import importlib.util
@@ -175,6 +187,8 @@ def process(pdb: str, params: str, out_dir: str, pre: dict | None = None) -> dic
                     rec[dst] = float(pre[key])
                 except (KeyError, TypeError, ValueError):
                     rec[dst] = float('nan')
+
+        rec.update(_coordination_geometry(pose, HIS_INDEX, li, mg))
 
         # --- stage 7: core packing ----------------------------------------------------------
         try:
@@ -416,6 +430,8 @@ def main() -> int:
     cols = ['name', 'iteration', 'stem', 'input', 'his_mg_before', 'his_mg', 'score', 'ca_rmsd_to_min', 'lig_rmsd_to_min',
             'packstat', 'apo_clashes', 'buried_charged', 'buns_ligand', 'buns_protein',
             'buried_frac', 'buried_frac_core', 'buried_frac_apolar', 'sasa_mg_A2',
+            'axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+            'mg_out_of_plane', 'n4_planarity',
             'buns_combined', 'buns_total', 'buried_charged_residues', 'binding_site_residues',
             'seconds', 'output']
     csv_path = out_root / 'cascade_metrics.csv'

@@ -217,3 +217,68 @@ one engine is meaningless on the other. See `ENGINES.md`.
 Cross-fold gate (the non-leading engine's opinion): ligand pLDDT ≥ 0.80, protein
 pLDDT ≥ 0.80, 13² stereocentre must agree. On v8's top 25 the cross-fold dropped
 designs the leading engine rated 0.95 — it is the single highest-yield check we have.
+
+## Axial coordination geometry — reported, never ranked **[ours]**
+
+The campaign gates coordination on one scalar, His NE2–Mg ∈ [2.0, 2.6] Å. By the shortlist
+that gate is **saturated** — v8's top 25 sit at 2.425 ± 0.030 Å — so every survivor looks
+identical on the only coordination measure we had. A distance cannot distinguish a real axial
+bond from a histidine sitting 2.4 Å away while pointing the wrong way.
+
+`tools/metal_geometry.py` adds five columns, computed in the cascade from the same pose that
+already yields `his_mg`. They split into **where the His sits** and **how it is turned**, and
+the two are only weakly related (ρ = 0.30), so neither substitutes for the other. All are
+orthogonal to every existing shortlist column (|ρ| ≤ 0.36 against `his_mg`,
+`buns_score_paper`, `packstat`, `buried_frac*`, `sasa_mg_A2`, `ligand_plddt`, `composite`;
+none significant at p < 0.05).
+
+### Replicate noise — read this before interpreting any single design
+
+Four designs, five independent FastRelax replicates of the same input:
+
+| measure | within-design sd | between-design sd | ratio |
+|---|---|---|---|
+| `axial_angle` | 0.47° | 3.77° | **0.12** |
+| `his_lonepair_angle` | 1.86° | 5.38° | 0.35 |
+| `mg_imidazole_oop` | 3.12° | 6.02° | **0.52** |
+| `mg_out_of_plane` | 0.000 Å | 0.011 Å | 0.00 |
+| `his_mg` (existing) | 0.008 Å | 0.028 Å | 0.28 |
+| `packstat` (existing) | 0.015 | 0.018 | 0.85 |
+
+`axial_angle` is the cleanest measure in this table — signal 8× the noise, better than
+`packstat`, which it sits beside. **`mg_imidazole_oop` is the weakest**: half its spread is
+relax noise, so a difference below ~6° between two designs means nothing. Do not repeat the
+packstat mistake of reading a single-measurement gap smaller than the replicate sd.
+
+### Reference values
+
+| structure | His–Mg (Å) | axial (°) | lone-pair (°) | Mg off-imid (°) | dome (Å) |
+|---|---|---|---|---|---|
+| v8 top 25 (minimised) | 2.425 ± 0.030 | 5.6 ± 2.5 | 16.0 ± 6.1 | 14.5 ± 6.8 | +0.092 ± 0.019 |
+| v8 top01 | 2.43 | 2.9 | 9.6 | 9.6 | +0.08 |
+| BDFP44 input pose (Yigal) | 2.45 | 11.4 | 7.8 | 5.5 | +0.22 |
+| 6HRK + His117 swap | 2.99 | 29.9 | 4.7 | 2.6 | −0.38 |
+
+**The loop trades placement for orientation.** Against the input pose it improves the axial
+angle (11.4° → 5.6° mean) while making the imidazole orientation markedly worse
+(off-imid 5.5° → 14.5°, lone-pair 7.8° → 16.0°). Both shifts are far larger than the
+replicate noise above. The restraint is a *distance* restraint, so the loop is free to satisfy
+it by moving the histidine into place while letting the rotamer drift off the lone-pair axis.
+This is a hypothesis about the restraint, not a measured cause.
+
+### Why these are not in `composite`
+
+Nothing shows they predict binding. Polizzi et al. Fig 1c is a direct warning: Rosetta ligand
+energy, an equally principled geometric/energetic term, was tested as the loop objective over
+70 iterations and *"the designs failed to optimize"*. Promoting an unvalidated term into
+`composite` would silently change which designs get ordered. They are reported, and
+`make_report.py` flags `his_lonepair_angle` or `mg_imidazole_oop` above 25° and `axial_angle`
+above 8° — thresholds ~4× and ~8× the respective replicate noise, so a flag is meaningful.
+
+### `mg_out_of_plane` is QC on the method, not a design measure
+
+It is effectively constant (replicate sd 0.000 Å, between-design sd 0.011 Å) because the
+Rosetta ligand params fix the chlorin's internal geometry — the loop **cannot** move the Mg
+out of its ring plane. Experimental 5-coordinate Mg-chlorophyll domes 0.3–0.5 Å toward the
+axial ligand; our minimised poses sit at 0.09 Å and cannot reproduce that. Report it as a
+check that the ligand is intact; never read it as a finding about the designs.

@@ -53,7 +53,17 @@ COLS = [
     ('dimer_iptm',          'Dimer ipTM',    '{:.2f}',  'AF3 ipTM for the SAME two-copy run. LOW is good. Tracks pAE at rho -0.97, so it is the same measurement on a scale whose modes separate: >=0.50 is a confident dimer'),
     ('sasa_mg_A2',          'SASA Mg',       '{:.2f}',  'solvent-exposed area of the magnesium, A^2. lower = more enclosed'),
     ('his_mg',              'His-Mg',        '{:.2f}',  'axial coordination distance after relax, A'),
+    ('axial_angle',         'Axial angle',   '{:.1f}',  'degrees between Mg->His NE2 and the chlorin ring normal. 0 = the His sits dead-on perpendicular above the Mg. Where the histidine SITS; the 2.0-2.6 A gate cannot see this'),
+    ('his_lonepair_angle',  'Lone-pair ang', '{:.1f}',  'degrees between NE2->Mg and the CE1-NE2-CD2 bisector. 0 = the Mg lies along the sp2 lone pair. How the histidine is TURNED - the widest-spread coordination measure we have'),
+    ('mg_imidazole_oop',    'Mg off-imid',   '{:.1f}',  'degrees the Mg sits out of the imidazole plane, where the lone pair lies. 0 is ideal; ~34 is poor orbital overlap even at a perfect 2.4 A distance'),
 ]
+
+# Advisory only. These are NOT in `composite` and do NOT change the ranking: nothing yet shows
+# they predict binding, and the paper's Fig 1c is a direct warning about adopting a principled-
+# looking geometric term as an objective. Thresholds are the rough upper quartile of v8's top 25.
+GEOMETRY_FLAGS = [('his_lonepair_angle', 25.0, 'lone pair poorly aimed at the Mg'),
+                  ('mg_imidazole_oop', 25.0, 'Mg far out of the imidazole plane'),
+                  ('axial_angle', 8.0, 'His off the ring axis')]
 
 
 def _engine(run: Path) -> str:
@@ -191,6 +201,11 @@ def order_reasons(df: pd.DataFrame, names: list[str]) -> dict[str, str]:
             ('xfold_ligand_plddt', 'cross-engine agreement'),
             ('xfold_confidence', 'cross-engine confidence'),
             ('interface_pae', 'widest margin on the dimer gate')]
+    # advisory: name a coordination-geometry concern if one applies, without affecting rank
+    def _geom_note(row):
+        bad = [msg for c, lim, msg in GEOMETRY_FLAGS
+               if c in row.index and pd.notna(row[c]) and float(row[c]) > lim]
+        return f" (watch: {'; '.join(bad)})" if bad else ''
     best_buns = df['buns_score_paper'].min() if 'buns_score_paper' in df else None
     for n in names:
         if n not in idx.index:
@@ -211,7 +226,8 @@ def order_reasons(df: pd.DataFrame, names: list[str]) -> dict[str, str]:
             s = df['sasa_mg_A2'].dropna()
             if len(s) > 8 and r['sasa_mg_A2'] <= s.quantile(0.10):
                 bits.append('magnesium most sealed from water')
-        out[n] = '; '.join(bits[:3]) if bits else 'balanced across the measures, no single weakness'
+        out[n] = ('; '.join(bits[:3]) if bits else
+                  'balanced across the measures, no single weakness') + _geom_note(r)
     return out
 
 
