@@ -1,0 +1,45 @@
+# v9-continue -- v9 RESUMED to 35 iterations, not a new campaign.
+#
+# THIS RUNS IN v9's OWN DIRECTORY. The driver sets
+#   start_iteration = last_complete + 1
+# so pointing it at /home/data/yuvaln/nise_bdfp44_v9 picks up where the auto-stop
+# left it, with the existing backbone queue, and runs 17 -> 34. Nothing is recomputed.
+#
+# The earlier v9b design was a fresh campaign from iteration 0 in a new directory.
+# That was wrong: it would have thrown away ~3 days of GPU and re-answered the
+# P(bind) question that v9 already settled.
+#
+# WHAT THIS TESTS. Only one thing against v9: whether iterations past the plateau
+# improve the designs. The published claim is that they do, and that the gain shows
+# up in BUNs rather than in the loop metrics:
+#   "performing NISE iterations beyond the plateau in ligand pLDDT or score was
+#    important for downstream filtering by additional biophysical metrics. Indeed,
+#    both EPIC and APEX came from later iterations."  (Nature 656, 237, 2026)
+#
+# WHY THE DECISION NEEDS THE HARVEST FIRST. v9's loop metrics went flat at
+# iteration 8 -- score 1.905/1.901/1.905/1.905/1.907 through iteration 15. BUNs is
+# NOT computed in the loop, only in the terminal cascade. So run the harvest, look
+# at whether v9's BUNs beats v8's best of 6, and decide with that in hand. Eighteen
+# more iterations is ~3.4 days at the measured 4.5 h/iteration.
+#
+# LAUNCH (only after the harvest has completed):
+#   chlide run campaigns/v9-continue-35.yaml --out /home/data/yuvaln/nise_bdfp44_v9
+name: v9-continue-35
+description: >
+  v9 resumed in place to the paper's 35 iterations with the convergence auto-stop
+  disabled. Identical to v9 in every other respect, so v9-at-stop vs v9-at-35
+  isolates the effect of iterating past the plateau.
+
+engine:
+  fold: boltz
+  cross_check: auto          # -> af3
+  constrain_his_mg: true
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+loop:
+  objective: ligand_plddt_and_pbind   # same as v9
+  iterations: 35                      # TOTAL, not additional -- resume continues toward it
+  convergence:
+    # OFF, or it would halt again immediately: the streak that stopped v9 is still
+    # in the history the resume reads.
+    enabled: false

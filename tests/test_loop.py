@@ -290,32 +290,34 @@ def test_debug_is_actually_small(tmp_path):
     assert dbg['debug'] is True
 
 
-def test_v9b_runs_past_the_plateau():
+def test_continuation_runs_past_the_plateau():
     """The published protocol: 35 iterations, and do NOT stop at the plateau.
 
     "performing NISE iterations beyond the plateau in ligand pLDDT or score was important for
     downstream filtering... both EPIC and APEX came from later iterations" (Nature 656, 237).
     """
-    v9b = load_campaign(CAMPAIGNS / 'v9b-boltz-pbind-long.yaml')
+    v9b = load_campaign(CAMPAIGNS / 'v9-continue-35.yaml')
     assert v9b.loop.iterations == 35
     assert v9b.loop.convergence.enabled is False
     assert v9b.loop.per_backbone == 500     # paper: 1,500/iteration, 500 for the first round
     assert v9b.loop.per_iteration == 1500
 
 
-def test_v9b_differs_from_v9_only_in_the_length(tmp_path):
+def test_continuation_differs_from_v9_only_in_the_length(tmp_path):
     """The second single-variable test. v7->v9 isolates P(bind); v9->v9b isolates length.
 
     If anything else drifts, neither comparison means what it claims.
     """
     v9 = load_campaign(CAMPAIGNS / 'v9-boltz-pbind.yaml')
-    v9b = load_campaign(CAMPAIGNS / 'v9b-boltz-pbind-long.yaml')
+    v9b = load_campaign(CAMPAIGNS / 'v9-continue-35.yaml')
     for field in ('ligand', 'scaffold', 'gates', 'stages', 'compute', 'engine'):
         assert getattr(v9, field) == getattr(v9b, field), f'{field} drifted'
     assert v9.loop.objective == v9b.loop.objective == 'ligand_plddt_and_pbind'
     assert (v9.loop.per_backbone, v9.loop.top_backbones) == \
            (v9b.loop.per_backbone, v9b.loop.top_backbones)
     assert (v9.loop.iterations, v9b.loop.iterations) == (25, 35)
+    # it RESUMES v9's directory rather than starting fresh -- the driver sets
+    # start_iteration = last_complete + 1, so a new run dir would redo everything.
     assert v9.loop.convergence.enabled and not v9b.loop.convergence.enabled
     # in the resolved params the only difference is the budget; the auto-stop travels by env
     diff = {k for k in nise_params(v9, tmp_path)
