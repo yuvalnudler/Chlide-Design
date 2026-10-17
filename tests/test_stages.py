@@ -168,7 +168,9 @@ def test_encoded_order_matches_finish_at_iter_sh():
     # Only real invocations. Comments and `say` hints also name tools (the GPU stages print a
     # copy-pasteable rerun command when they skip) and are not part of the executed order.
     lines = [l for l in sh.read_text().splitlines() if not re.match(r'\s*(#|say\b)', l)]
-    seen = re.findall(r'tools/([a-z0-9_]+)\.py', '\n'.join(lines))
+    # tools are invoked as "$TOOLS"/name.py (absolute, from the repo) -- accept the legacy
+    # relative form too so this keeps working if a campaign still ships its own copies.
+    seen = re.findall(r'(?:"\$TOOLS"|\$\{TOOLS\}|tools)/([a-z0-9_]+)\.py', '\n'.join(lines))
     # collapse the two engine branches into one position
     collapsed, skip_next = [], False
     for i, t in enumerate(seen):

@@ -18,6 +18,11 @@
 #        campaign from its own location -- it used to, which silently pointed it at the repo and
 #        left it waiting forever on a path that could never appear.
 set -u
+# Where the TOOLS live: beside this script, in the repo. Self-location is right for code and
+# wrong for data -- the run dir comes from --run-dir below. Conflating the two is what broke
+# the v9 harvest: the script cd's into the run dir, so a relative "tools/x.py" resolved to
+# <campaign>/tools/x.py, which does not exist, and all 11 stages failed in 19 seconds.
+TOOLS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PY=/home/yigall/mambaforge/envs/lasermpnn/bin/python
 RPY=/home/yigall/mambaforge/envs/Rosetta/bin/python
 STOP_AT=${1:?usage: finish_at_iter.sh <iteration> [--run-dir DIR]}
@@ -118,25 +123,25 @@ say "stopping the relax watcher, then catching the pool up on the final iteratio
 pkill -f "$RUN/tools/relax_watcher.sh" 2>/dev/null
 sleep 3
 while pgrep -f relax_pool.py >/dev/null; do sleep 20; done      # let any in-flight pass finish
-"$PY" tools/relax_pool.py --run-dir "$RUN" --workers "$WORKERS"
+"$PY" "$TOOLS"/relax_pool.py --run-dir "$RUN" --workers "$WORKERS"
 say "relaxed pool: $(( $(wc -l < results/relaxed_pool/index.csv) - 1 )) designs"
 
 # --- 4. refresh the harvest so metrics.csv covers every iteration -------------------------------
 say "harvest"
-"$PY" tools/harvest_global_top.py --run-dir "$RUN" --top 50
+"$PY" "$TOOLS"/harvest_global_top.py --run-dir "$RUN" --top 50
 
 # --- 5. terminal cascade, CPU only --------------------------------------------------------------
 say "cascade (--pre-relaxed: holo minimisation already done during the run)"
-nice -n5 "$RPY" tools/polizzi_cascade.py --run-dir "$RUN" --from-metrics --pre-relaxed \
+nice -n5 "$RPY" "$TOOLS"/polizzi_cascade.py --run-dir "$RUN" --from-metrics --pre-relaxed \
      --workers "$WORKERS" || say "WARNING: cascade returned non-zero"
 
 # --- 6. AF3 aggregation proxy, the only GPU step ------------------------------------------------
 say "AF3 two-copy interface pAE, top ${AF3_TOP} by BUNs (GPU, ~1.2 h)"
 if gpus_free; then
-  "$PY" tools/af3_interface_pae.py --run-dir "$RUN" --top "$AF3_TOP" --devices 0,1,2,3 \
+  "$PY" "$TOOLS"/af3_interface_pae.py --run-dir "$RUN" --top "$AF3_TOP" --devices 0,1,2,3 \
      || say "WARNING: AF3 stage returned non-zero"
 else
-  say "  run it later with:  $PY tools/af3_interface_pae.py --run-dir $RUN --top $AF3_TOP --devices 0,1,2,3"
+  say "  run it later with:  $PY ${TOOLS}/af3_interface_pae.py --run-dir $RUN --top $AF3_TOP --devices 0,1,2,3"
   say "  then re-run the shortlist rebuild so interface_pae enters the ranking."
 fi
 say "GPUs now free for good: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader | tr '\n' ' ')"
@@ -153,7 +158,7 @@ say "GPUs now free for good: $(nvidia-smi --query-gpu=memory.used --format=csv,n
 # worked because an earlier run had left those files on disk. Correct order: build the
 # shortlist, score it, then rebuild it so the AF3 and burial columns land in the ranking.
 say "final shortlist"
-"$PY" tools/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist returned non-zero"
+"$PY" "$TOOLS"/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist returned non-zero"
 # ---- ENGINE-DEPENDENT fold check ---------------------------------------------------------
 # The two GPU scoring stages answer different questions and are NOT interchangeable:
 #   dimer  (af3_interface_pae.py)  ALWAYS AF3 -- it is an aggregation proxy, two copies of the
@@ -188,35 +193,35 @@ print("AF3" if str(f).lower().startswith("af3") else ("Boltz" if f else ""))
 _ENGINE=$(detect_engine "$RUN")
 say "fold check: campaign engine is ${_ENGINE}, cross-checking with the other model"
 if [ "$_ENGINE" = "AF3" ]; then
-  "$PY" tools/crossfold.py --run-dir "$RUN" --top 25 --mode complex --devices 0,1,2,3 \
+  "$PY" "$TOOLS"/crossfold.py --run-dir "$RUN" --top 25 --mode complex --devices 0,1,2,3 \
        || say "WARNING: Boltz cross-fold returned non-zero"
 else
 say "AF3 monomer fold confidence, top 25 (GPU, ~5 min)"
 if gpus_free; then
-  "$PY" -u tools/af3_monomer.py --run-dir "$RUN" --top 25 --devices 0,1,2,3 \
+  "$PY" -u "$TOOLS"/af3_monomer.py --run-dir "$RUN" --top 25 --devices 0,1,2,3 \
      || say "WARNING: AF3 monomer stage returned non-zero"
 else
-  say "  run it later with:  $PY -u tools/af3_monomer.py --run-dir $RUN --top 25 --devices 0,1,2,3"
+  say "  run it later with:  $PY -u ${TOOLS}/af3_monomer.py --run-dir $RUN --top 25 --devices 0,1,2,3"
 fi
 fi
 
 say "strict burial rescore (alpha=9)"
-"$PY" tools/burial_rescore.py --run-dir "$RUN" || say "WARNING: burial rescore returned non-zero"
+"$PY" "$TOOLS"/burial_rescore.py --run-dir "$RUN" || say "WARNING: burial rescore returned non-zero"
 say "rebuilding the shortlist so AF3-monomer and burial columns enter the ranking"
-"$PY" tools/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist rebuild returned non-zero"
+"$PY" "$TOOLS"/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist rebuild returned non-zero"
 say "SASA ranking"
-"$PY" tools/sasa_rank.py --run-dir "$RUN" --top 25 || say "WARNING: sasa returned non-zero"
+"$PY" "$TOOLS"/sasa_rank.py --run-dir "$RUN" --top 25 || say "WARNING: sasa returned non-zero"
 
 # --- 8. figures and the final Telegram report -----------------------------------------------
 # Easy to forget, and the reporter is already dead by this point (step 2 kills it before any
 # result exists), so without this the campaign finishes silently and produces no plots.
 say "picking the order set (top 8, de-duplicated)"
-"$PY" tools/order_set.py --run-dir "$RUN" --n 8 || say "NOTE: order set not written (see above)"
+"$PY" "$TOOLS"/order_set.py --run-dir "$RUN" --n 8 || say "NOTE: order set not written (see above)"
 
 say "joined HTML report (all measures, sortable)"
-"$PY" tools/make_report.py --run-dir "$RUN" || say "WARNING: report returned non-zero"
+"$PY" "$TOOLS"/make_report.py --run-dir "$RUN" || say "WARNING: report returned non-zero"
 say "figures + final Telegram report"
-"$PY" tools/paper_figures.py --run-dir "$RUN" --telegram || say "WARNING: figures/telegram returned non-zero"
+"$PY" "$TOOLS"/paper_figures.py --run-dir "$RUN" --telegram || say "WARNING: figures/telegram returned non-zero"
 
 # Report the TRUTH, not an aspiration. This line used to print the shortlist path
 # unconditionally; after the cascade was SIGKILLed at 2770/11201 it still said "DONE ...
