@@ -108,3 +108,34 @@ now *measured* (trough < 0.6 × the smaller of the two modal peaks) and the titl
 **Lesson:** a label that names an engine, or asserts a shape in the data, is a claim. In a
 script shared across campaigns it must be derived, not typed. Two of these shipped before
 anyone noticed; the third was caught only because the fix for the first two made us re-run v7.
+
+---
+
+## The repo's launch path never starts the relax-pool watcher (2026-10-17, v9)
+
+**Symptom:** v9's harvest had **12,972 designs pending relaxation** and spent hours on them.
+v8's harvest caught its pool up in six minutes.
+
+**Cause:** the in-loop relax is not the pool relax, and only ever touches `relax_top_n=12`
+designs per iteration — just enough to gate which backbones get promoted. Both campaigns did
+exactly that. The difference is a *separate* background watcher running `tools/relax_pool.py`
+alongside the campaign:
+
+```
+v8: logs/relax_watcher.log -> "relax watcher started: workers=12 interval=600s"
+    ran 2026-10-09 14:49 to 2026-10-10 06:49, pool at 4,983 by harvest
+v9: no relax_watcher.log, no watcher, pool at 0
+```
+
+`grep -rn 'relax_pool|relax_watcher' src/ campaigns/` finds **nothing but a comment**. v8 was
+launched from a per-campaign script that started the watcher by hand; `chlide run` never did,
+and nobody noticed because the harvest does the same work — just all at once, at the end,
+while someone is waiting for it.
+
+**Lesson:** when work is normally absorbed by a background process, its absence does not fail,
+it just moves the cost to the worst possible moment. The migration checked that every *tool*
+came across; it did not check that everything the old launcher *started* came across.
+
+**Fix (not yet applied):** start the pool watcher from `src/chlide/loop.py` when
+`relax.pool_watcher` is enabled, defaulting on, and have the harvest report how much of the
+pool was already done so a silent regression is visible in the log. Must land before v9b/v10.
