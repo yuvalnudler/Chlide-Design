@@ -542,6 +542,20 @@ def main():
                 print(f'[harvest] {tool} not found; skipping', flush=True)
 
         todo = [i for i in sorted(hist) if i not in sent]
+        # A missing or wiped state file must NOT mean "replay the whole campaign". Deleting
+        # it to force one iteration to resend instead queued 18 iterations and sent 18
+        # near-identical albums. On first sight of a run that already has history, report only
+        # the newest and record the rest as seen. To deliberately resend one iteration, drop
+        # just that entry from logs/.telegram_sent.json.
+        if not sent and len(todo) > 1:
+            newest_only = todo[-1]
+            sent.update(i for i in todo if i != newest_only)
+            todo = [newest_only]
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            json.dump({'iterations': sorted(sent)}, state_file.open('w'))
+            print(f'[report] no send history for a run with {len(sent) + 1} iterations: '
+                  f'reporting only iteration {newest_only}, marking the rest as seen',
+                  flush=True)
         for it in todo:
             text = summarise(a.run_dir, it, hist[it], sm_hist.get(it, pd.DataFrame()), a.total)
             plots = make_plots(a.run_dir, hist, sm_hist, a.run_dir / 'logs' / 'plots')
