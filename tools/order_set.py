@@ -69,9 +69,12 @@ def pick(df: pd.DataFrame, n: int, max_identity: float) -> tuple[pd.DataFrame, l
     if 'xfold_ligand_plddt' in d.columns and d['xfold_ligand_plddt'].notna().any():
         before = len(d)
         d = d[d['xfold_ligand_plddt'].isna() | (d['xfold_ligand_plddt'] >= XFOLD_LIG_MIN)]
-        log.append(f'cross-fold ligand pLDDT >= {XFOLD_LIG_MIN}: {len(d)} kept ({before - len(d)} dropped)')
+        judged = int(d['xfold_ligand_plddt'].notna().sum())
+        log.append(f'cross-fold ligand pLDDT >= {XFOLD_LIG_MIN}: {len(d)} kept '
+                   f'({before - len(d)} dropped; {judged} of {len(d)} actually cross-folded, '
+                   f'the rest unjudged and kept)')
     else:
-        log.append('cross-fold: NOT RUN for this campaign, not applied')
+        log.append('cross-fold: no values for any design, not applied')
 
     sort_cols, asc = ['buns_score_paper'], [True]
     if 'composite' in d.columns:
@@ -108,7 +111,16 @@ def main() -> int:
     if not sl.is_file():
         print(f'no shortlist at {sl}', file=sys.stderr)
         return 1
-    df = pd.read_csv(sl, comment='#')
+    # Use make_report.load(), not shortlist.csv directly. The cross-fold columns are produced by
+    # that merge and do NOT exist in shortlist.csv, so reading the csv made the cross-fold gate
+    # silently unreachable -- it reported "NOT RUN" while the data was sitting in
+    # crossfold_complex.csv, and a design at 0.713 reached the v8 order set because of it.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_mr', str(Path(__file__).resolve().parent / 'make_report.py'))
+    mr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mr)
+    df = mr.load(R)
     sel, log = pick(df, a.n, a.max_identity)
     for line in log:
         print('  ' + line)

@@ -275,3 +275,51 @@ def test_geometry_is_advisory_not_a_ranking_term():
     components = src[src.index('COMPONENTS'):src.index('COMPONENTS') + 400]
     for col in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop'):
         assert col not in components, f'{col} leaked into the composite ranking'
+
+
+# ------------------------------------------------------------------ order set
+
+def test_order_set_gates_on_columns_that_actually_exist():
+    """order_set.py filtered on `xfold_ligand_plddt`, which shortlist.csv does not contain --
+    make_report.load() creates it by merging crossfold_complex.csv. Reading the csv directly
+    made the gate unreachable: it logged "NOT RUN" while the data sat on disk, and a design
+    whose cross-fold ligand pLDDT was 0.713 reached v8's order set past a >= 0.80 gate.
+
+    Every column the selection rule depends on must be present in the frame it is applied to.
+    """
+    if not V8.is_dir():
+        pytest.skip('v8 campaign not present')
+    import importlib.util
+    def _load(name):
+        spec = importlib.util.spec_from_file_location(name, str(ROOT / 'tools' / f'{name}.py'))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+    mr = _load('make_report')
+    df = mr.load(V8)
+    for col in ('buns_score_paper', 'composite', 'sequence',
+                'interface_pae', 'xfold_ligand_plddt'):
+        assert col in df.columns, f'order_set gates on {col}, absent from the frame it uses'
+
+
+def test_order_set_rule_reproduces_v8s_hand_picked_set():
+    """The rule was written down from v8's manual selection; it must still reproduce it.
+
+    This is the only check that the encoded rule matches the judgement it was derived from.
+    If it drifts, either the rule changed or the upstream measures did -- both worth knowing.
+    """
+    if not V8.is_dir():
+        pytest.skip('v8 campaign not present')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('os_', str(ROOT / 'tools' / 'order_set.py'))
+    os_ = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(os_)
+    spec2 = importlib.util.spec_from_file_location('mr2', str(ROOT / 'tools' / 'make_report.py'))
+    mr = importlib.util.module_from_spec(spec2)
+    spec2.loader.exec_module(mr)
+    sel, _log = os_.pick(mr.load(V8), 8, 0.90)
+    got = [n.replace('_model_0', '') for n in sel['name']]
+    expected = ['iter7_chunk_0_seq_104', 'iter5_chunk_0_seq_207', 'iter15_chunk_0_seq_105',
+                'iter13_chunk_2_seq_105', 'iter15_chunk_0_seq_21', 'iter9_chunk_2_seq_134',
+                'iter7_chunk_1_seq_65', 'iter12_chunk_3_seq_194']
+    assert got == expected
