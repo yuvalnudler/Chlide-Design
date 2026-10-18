@@ -154,3 +154,22 @@ Two more found while porting:
 Still to do: have the harvest log how much of the pool was already relaxed, so a watcher that
 silently did not run is visible without counting files. Deferred only because `finish_at_iter.sh`
 was mid-execution on v9's harvest.
+
+---
+
+## Coordination geometry became a loop gate, and it is on by default (2026-10-19, v11)
+
+Not a bug — a behaviour change worth recording because it is the kind that bites later.
+
+`gates.axial_angle_max`, `lonepair_angle_max` and `mg_imidazole_oop_max` are new fields with
+defaults at the experimental p90, and the driver now refuses to promote a backbone whose
+predicted coordination falls outside them. Like `coordination_window`, they apply to **every**
+campaign, so **re-running v7, v8 or v9 from its YAML no longer reproduces that campaign** — it
+produces a gated version of it. Finished results on disk are untouched; only a fresh run
+differs.
+
+Measured pass rates on stored predictions: v7 59%, v10 39%, v9 14%. So a v7 replay would keep
+most of what it produced, and a v9 replay would lose most of it — which is the point.
+
+To reproduce a pre-v11 campaign exactly, set all three to 90 in that campaign's YAML, which
+disables them in practice.

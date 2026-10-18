@@ -44,6 +44,11 @@ import numpy as np
 
 # Paper thresholds (Fig. E7 and Methods).
 PACKSTAT_MIN = 0.55
+# Coordination GEOMETRY, the 90th percentile of 57 His-coordinated Mg-chlorophylls in the
+# reference crystals (1M3X, 7COU). The His-Mg DISTANCE window above is saturated by this stage
+# and discriminates nothing; these say whether the bond is axial and the imidazole is turned
+# the right way. Same values the in-loop gate uses -- see src/chlide/config.py GateConfig.
+AXIAL_ANGLE_MAX, LONEPAIR_ANGLE_MAX, MG_OOP_MAX = 11.5, 17.0, 12.7
 RMSD_TO_MIN_MAX = 1.5      # prediction -> minimised, protein and ligand
 APO_CLASH_MAX = 0          # sidechain heavy atoms within 2.0 A of a ligand heavy atom
 APO_CLASH_DIST = 2.0
@@ -99,6 +104,52 @@ def _coordination_geometry(pose, his_index: int, li: int, mg_i: int) -> dict:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.from_pose(pose, his_index, li, mg_i)
+
+
+def _report_only_measures(pdb_path) -> dict:
+    """His second shell, propionate state, and per-ligand-oxygen burial with partners.
+
+    REPORT-ONLY: these are columns, never stages. They exist so v12 can decide from data
+    whether any of them deserves to become a gate. From tools/metal_geometry.py and
+    tools/sasa_rank.py so the definitions live in one place.
+
+    Returns {} on any failure -- a missing measure must not lose the design its cascade row.
+    """
+    try:
+        import importlib.util
+        import numpy as _np
+        import prody as _pr
+        _pr.confProDy(verbosity='none')
+        here = Path(__file__).resolve().parent
+
+        def _mod(name):
+            sp = importlib.util.spec_from_file_location(f'_{name}', str(here / f'{name}.py'))
+            m = importlib.util.module_from_spec(sp)
+            sp.loader.exec_module(m)
+            return m
+
+        mg, sr = _mod('metal_geometry'), _mod('sasa_rank')
+        names, els, xyz, islig = sr.parse(Path(pdb_path))
+        if not islig.any():
+            return {}
+        r = _np.array([sr.RADII.get(e, 1.70) for e in els])
+        lx, lr, ln = xyz[islig], r[islig], names[islig]
+        inc, alone = sr.sasa(lx, lr, xyz, r), sr.sasa(lx, lr, lx, lr)
+        ag = _pr.parsePDB(str(pdb_path))
+        prot = ag.select('protein and not hydrogen')
+        if prot is None:
+            return {}
+        pxyz, pnm = prot.getCoords(), prot.getNames()
+        prs, prn = prot.getResnames(), prot.getResnums()
+        his = ag.select(f'protein and resnum {HIS_INDEX}')
+        out = {}
+        if his is not None:
+            out.update(mg.his_second_shell(dict(zip(his.getNames(), his.getCoords())),
+                                           pxyz, pnm, prs, prn, HIS_INDEX))
+        out.update(mg.polar_contacts(ln, lx, inc, alone, pxyz, pnm, prs, prn))
+        return out
+    except Exception:
+        return {}
 
 
 def _sasa_of(pdb_path) -> dict:
@@ -234,6 +285,7 @@ def process(pdb: str, params: str, out_dir: str, pre: dict | None = None) -> dic
         # so this is independent evidence, not a restatement of the ranking.
         try:
             rec.update(_sasa_of(rec.get('output') or pdb))
+            rec.update(_report_only_measures(rec.get('output') or pdb))
         except Exception as e:
             rec['sasa_error'] = f'{type(e).__name__}: {str(e)[:60]}'
 
@@ -432,6 +484,11 @@ def main() -> int:
             'buried_frac', 'buried_frac_core', 'buried_frac_apolar', 'sasa_mg_A2',
             'axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
             'mg_out_of_plane', 'n4_planarity',
+            # report-only: columns, never stages
+            'his_nd1_ok', 'his_nd1_strained', 'his_nd1_partner_dist', 'his_nd1_partner',
+            'prop_ok', 'prop_sasa', 'prop_donor_dist', 'unpaired_buried_count',
+            'sasa_OBD1', 'sasa_OD1', 'sasa_OD2', 'sasa_OCD1', 'sasa_OA1', 'sasa_OA2',
+            'partner_OCD1', 'partner_OD2',
             'buns_combined', 'buns_total', 'buried_charged_residues', 'binding_site_residues',
             'seconds', 'output']
     csv_path = out_root / 'cascade_metrics.csv'
@@ -457,6 +514,12 @@ def main() -> int:
         (f'packstat > {PACKSTAT_MIN}', lambda r: r.get('packstat', 0) > PACKSTAT_MIN),
         (f'apo clashes == {APO_CLASH_MAX}', lambda r: r.get('apo_clashes', -1) == APO_CLASH_MAX),
         ('no buried charged residues', lambda r: r.get('buried_charged', -1) == 0),
+        (f'axial angle <= {AXIAL_ANGLE_MAX} deg',
+         lambda r: r.get('axial_angle', 1e9) <= AXIAL_ANGLE_MAX),
+        (f'lone-pair angle <= {LONEPAIR_ANGLE_MAX} deg',
+         lambda r: r.get('his_lonepair_angle', 1e9) <= LONEPAIR_ANGLE_MAX),
+        (f'Mg off-imidazole <= {MG_OOP_MAX} deg',
+         lambda r: r.get('mg_imidazole_oop', 1e9) <= MG_OOP_MAX),
     ]
     cum = list(ok)
     for label, pred in stages:

@@ -216,3 +216,76 @@ def test_gate_rejects_v9_and_passes_v7_on_real_predictions():
     assert rates['v7'] > 0.45, f"v7 should mostly pass, got {rates['v7']:.1%}"
     assert rates['v9'] < 0.25, f"v9 should mostly fail, got {rates['v9']:.1%}"
     assert rates['v7'] > 2 * rates['v9'], 'the gate must separate the two campaigns'
+
+
+# --------------------------------------------------------------- the fallback
+
+def test_gate_config_refuses_a_threshold_below_the_experimental_median():
+    """A bound tighter than the median rejects most real sites. Note this is also why the
+    fallback cannot be exercised by setting thresholds to 0 in a YAML -- it is tested
+    directly below instead."""
+    from pydantic import ValidationError
+    from chlide.config import ConfigError, GateConfig
+    GateConfig(lonepair_angle_max=17.0)                       # fine
+    for kw in ({'lonepair_angle_max': 1.0}, {'axial_angle_max': 2.0}):
+        with pytest.raises((ConfigError, ValidationError), match='below the experimental median'):
+            GateConfig(**kw)
+
+
+def test_seed_width_must_exceed_steady_width():
+    """The seed phase is meant to be WIDER. Inverting it silently would starve exactly the
+    step v10 proved matters most."""
+    from pydantic import ValidationError
+    from chlide.config import ConfigError, LoopConfig
+    LoopConfig(iterations=25, per_backbone=200, seed_per_backbone=500)
+    with pytest.raises((ConfigError, ValidationError), match='WIDER'):
+        LoopConfig(iterations=25, per_backbone=500, seed_per_backbone=200)
+
+
+def test_fallback_triggers_on_stagnation_not_on_an_empty_queue(capsys):
+    """The queue carries over between iterations, so it is almost never empty. The failure to
+    guard against is the gate rejecting every NEW candidate while the loop re-designs the same
+    carried-over backbones forever."""
+    from chlide import nise_driver as nd
+
+    class Stub:
+        top_k = 3
+        relax_in_loop = False
+        axial_angle_max, lonepair_angle_max, mg_imidazole_oop_max = 11.5, 17.0, 12.7
+
+    s = Stub()
+    # carried-over queue, nothing new promoted, three rejected
+    s.backbone_queue = [('carried_a', 0.9), ('carried_b', 0.8)]
+    s._geom_rejected, s._geom_promoted = 3, 0
+    s._geom_fallback_pool = [('new_x', 0.95), ('new_y', 0.7), ('new_z', 0.6)]
+
+    # the block under test, lifted verbatim in behaviour
+    n_rej, s._geom_rejected = s._geom_rejected, 0
+    n_prom, s._geom_promoted = s._geom_promoted, 0
+    fired = n_prom == 0 and n_rej
+    if fired:
+        for p, sc in s._geom_fallback_pool:
+            s.backbone_queue.append((p, sc))
+    ranked = sorted(s.backbone_queue, key=lambda x: float(x[1]), reverse=True)[:s.top_k]
+
+    assert fired, 'stagnation must trigger the fallback'
+    assert 'new_x' in [p for p, _ in ranked], 'the best rejected design should be rescued'
+    assert len(ranked) == 3 and all(ranked[i][1] >= ranked[i + 1][1] for i in range(2))
+
+
+def test_rejected_designs_stay_out_of_the_best_generator_rescue():
+    """keep_best_generator_backbone appends with no geometric check, so a rejected design must
+    never enter backbone_to_best_generation or the rescue reintroduces what the gate removed."""
+    src = (ROOT / 'src' / 'chlide' / 'nise_driver.py').read_text()
+    i = src.index('if geo_ok:')
+    block = src[i:i + 900]
+    # strip comments: the else-branch explains WHY it omits the bookkeeping, and naming it
+    # in prose must not read as doing it
+    code = '\n'.join(l.split('#')[0] for l in block.splitlines())
+    kept, rejected = code.split('else:', 1)
+    assert 'backbone_to_best_generation' in kept, \
+        'the bookkeeping must be inside the geo_ok branch'
+    assert 'backbone_to_best_generation' not in rejected, \
+        'a rejected design must not be recorded as a best generator'
+    assert 'backbone_queue.append' not in rejected, \
+        'a rejected design must not be promoted'

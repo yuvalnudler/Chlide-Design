@@ -290,6 +290,11 @@ class DesignCampaign:
 
         self.num_iterations = num_iterations
         self.sequences_sampled_per_backbone = sequences_sampled_per_backbone
+        self.steady_sequences_per_backbone = sequences_sampled_per_backbone
+        self.seed_sequences_per_backbone = kwargs.pop('seed_sequences_per_backbone', None)
+        if self.seed_sequences_per_backbone:
+            # Start wide; narrow once the queue holds top_k gate-passing backbones.
+            self.sequences_sampled_per_backbone = self.seed_sequences_per_backbone
         self.sequences_sampled_at_once = sequences_sampled_at_once
         self.top_k = num_top_backbones_per_round
 
@@ -441,6 +446,24 @@ class DesignCampaign:
             num_sampled += num_seq_to_sample
         
         return sampled_proteins, sampled_sequences, laser_nll, laser_bs_nll
+
+    def update_sampling_width(self, iidx: int) -> None:
+        """Pick this iteration's per-backbone sample count.
+
+        Seed phase while the queue holds fewer than top_k backbones; every entry in the queue
+        passed the geometry gate to get there, so "queue is full" is the same statement as
+        "we have top_k good candidates". No retry machinery: if an iteration does not fill the
+        queue, the next simply runs at seed width again.
+        """
+        if not self.seed_sequences_per_backbone:
+            return
+        want = (self.seed_sequences_per_backbone if len(self.backbone_queue) < self.top_k
+                else self.steady_sequences_per_backbone)
+        if want != self.sequences_sampled_per_backbone:
+            print(f'SAMPLING: iteration {iidx} -- {self.sequences_sampled_per_backbone} -> '
+                  f'{want} sequences per backbone ({len(self.backbone_queue)} of '
+                  f'{self.top_k} backbones in the queue)', flush=True)
+            self.sequences_sampled_per_backbone = want
 
     def coordination_geometry(self, prot_sel, lig_sel) -> dict:
         """Axial-coordination geometry of a PREDICTION, before any relax.
@@ -1073,6 +1096,12 @@ def main(use_wandb, reduce_executable_path, reduce_hetdict_path, **kwargs):
     design_campaign = DesignCampaign(**kwargs)
 
     for iidx in range(design_campaign.start_iteration, design_campaign.num_iterations):
+
+        # Two-phase sampling: wide while seeding, narrow once the queue is full of
+        # gate-passing backbones. Announced every time it changes -- a switch that happens
+        # silently cannot be audited, and one that never fires means the run is quietly doing
+        # every iteration at seed width.
+        design_campaign.update_sampling_width(iidx)
 
         # Run laser on all backbone queue inputs.
         all_sampled_proteins, backbone_sample_indices, sampled_backbone_path, all_sampled_sequences = [], [], [], []

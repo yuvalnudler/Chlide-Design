@@ -1,0 +1,71 @@
+# v11a -- v7 with the coordination geometry gated in the loop, and a two-phase sample width.
+#
+# WHAT WENT WRONG IN v9 AND v10. Both maximised ligand pLDDT + P(bind), and both walked the
+# axial histidine out of any geometry nature uses. Measured against 57 His-coordinated
+# Mg-chlorophylls in the reference crystals (1M3X, 7COU; lone-pair angle median 10.9 deg,
+# p90 17.1), v9's shortlist sits at 35.8 deg with 0.6% of its pool inside the experimental
+# p90 on all four coordination measures; v10 reached 21.9 deg and 2.7%. v7, optimising ligand
+# pLDDT alone, stayed at 13.6 deg and never drifted (rho -0.009 against iteration, where v9
+# is +0.404).
+#
+# The drift is in BOLTZ'S OWN PREDICTIONS, not introduced by our relax: v9's predictions go
+# 15.3 -> 40.2 deg across the run. So the search has to be constrained, not the scoring. The
+# only coordination gate we had is a DISTANCE window, and a distance cannot see a rotation.
+#
+# CHANGE 1 -- the geometry gate. A candidate is measured before promotion and skipped if its
+# coordination falls outside the experimental p90. Defaults live in GateConfig; this campaign
+# takes them as they are. Measured pass rate on stored predictions: v7 59%, v10 39%, v9 14%,
+# so the gate keeps most of what v7 produced and excludes most of what v9 did.
+#
+# CHANGE 2 -- two-phase sampling. Iteration 0 starts from ONE backbone and seeds everything
+# downstream. v10 gave that step 64 designs against v9's 500 and never recovered -- 0.05
+# ligand pLDDT behind for all 25 iterations, no convergence. So seed WIDE (500/backbone) and
+# narrow to 200 once the queue holds three gate-passing backbones. 500x1 = 500 folds at the
+# seed, 200x3 = 600 thereafter; both divide evenly across four GPUs (125 and 150), and
+# sequences_sampled_at_once 25 divides both with no ragged tail.
+#
+# THE QUESTION THIS ANSWERS. Not "does the gate work" -- that is a check. The result is
+# whether 200/backbone reaches the same BUNs as 1500. v7 best 10 / median 19 and v8 best 6 /
+# median 12 are the full-width references; v10 at 192 with a starved seed managed best 16 /
+# median 19, the worst of any campaign. If v11a lands near v7, the breadth saving is real and
+# every later campaign gets ~2.5x cheaper. If it lands near v10, breadth was the cause, not
+# seeding, and we go back to 1500.
+#
+# NO P(bind). It degrades coordination at 1500/iteration (v9) and at 192 (v10). Re-testing it
+# WITH the gate is the obvious next experiment and belongs in v12, one variable at a time.
+#
+# Cost, from v7's measured 153 min per 1500 folds: ~51 min for the seed iteration, ~61 min
+# each thereafter, about 25 h for 25 iterations against v7's 64 h at full width.
+name: v11a-boltz-gated
+description: >
+  v7 reproduced with coordination geometry gated inside the loop and a wide-then-narrow
+  sample schedule. Boltz-2x leads with the patched two-sided 2.0-2.6 A His-Mg window; AF3
+  cross-checks. Pairs with v11b, which runs the same design on AF3.
+
+engine:
+  fold: boltz
+  # TRUE because Boltz needs our patch: upstream ConnectionsPotential has lower_bounds = None
+  # and a hardcoded buffer, so a declared bond collapses to ~1.52 A, and unconstrained it
+  # floors at 2.939 A. The patch supplies the two-sided 2.0-2.6 A window. See v11b for why
+  # the same flag is FALSE there -- it is not the same decision.
+  constrain_his_mg: true
+  cross_check: auto          # -> af3
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+gates:
+  # Stated explicitly even though these are the GateConfig defaults, because this is the
+  # campaign the gate was built for and a reader should not have to go looking. They are the
+  # 90th percentile of 57 His-coordinated Mg-chlorophylls in the reference crystals.
+  axial_angle_max: 11.5
+  lonepair_angle_max: 17.0
+  mg_imidazole_oop_max: 12.7
+
+loop:
+  objective: ligand_plddt    # as v7. NOT ligand_plddt_and_pbind -- see above.
+  iterations: 25
+  top_backbones: 3
+
+  # THE TWO LINES THAT DIFFER FROM v7, besides the gate.
+  seed_per_backbone: 500     # until 3 gate-passing backbones exist
+  per_backbone: 200          # thereafter: 600 folds/iteration, 150 per GPU
+  sequences_sampled_at_once: 25   # divides both 500 and 200 exactly

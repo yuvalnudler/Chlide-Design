@@ -1,0 +1,66 @@
+# v11b -- v8 with the coordination geometry gated in the loop, and a two-phase sample width.
+#
+# The AF3 arm of v11. Identical in design to v11a; only the engine differs, so v11a vs v11b
+# is a clean engine comparison at matched settings, and v7 vs v11a / v8 vs v11b each isolate
+# what the gate and the narrower sampling did.
+#
+# WHY AF3 IS WORTH AN ARM. On the finished campaigns AF3 has the best coordination of any
+# engine we have run: 49.5% of v8's pool passes the experimental p90 on all four measures
+# against v7's 19.5%, and its BUNs best is 6 against v7's 10. Its weaknesses are the worst
+# ligand burial (0.619 vs v7's 0.722) and a ~59% chirality yield, so a given number of folds
+# buys fewer usable designs than on Boltz.
+#
+# WHY constrain_his_mg IS FALSE HERE AND TRUE IN v11a. This is not a choice about how hard to
+# restrain -- the two engines offer different mechanisms and AF3's is harmful. Its only one
+# is bondedAtomPairs, which has no distance window at all: it crushes His-Mg to 1.50 A, puts
+# the metal 0.298 A out of plane, and FLIPS THE 13-2 STEREOCENTRE TO R. There is nothing to
+# turn on that helps.
+#
+#   And unrestrained AF3 does not need it. Over 150 sampled v8 predictions, His-Mg is 2.31 A
+#   with 95.3% inside the 2.0-2.6 window -- closer to the experimental 2.2 A than our patched
+#   Boltz, which sits pinned at 2.03 A on the floor of the window we imposed. docs/ENGINES.md
+#   says unrestrained AF3 gives 4.22 A with Rosetta forming the bond at relax; that is not
+#   what v8 produced and the doc needs correcting. The practical consequence is that the
+#   in-loop geometry gate has a real coordination to measure on this arm too, which was not
+#   obvious and was checked before this campaign was written.
+#
+# WHAT TO WATCH THAT v11a DOES NOT NEED. Every pass-rate figure behind the gate's thresholds
+# was measured on BOLTZ predictions. The gate should behave on AF3 -- its coordination is
+# better, so if anything it should reject less -- but the 48-60% seeding figure is not
+# established here. If the seed iteration fails to fill the queue, that is the first thing to
+# check, and the seed phase simply runs again at 500 rather than failing.
+#
+# Cost, from v8's measured 64 min per 1500 folds: ~21 min for the seed iteration, ~26 min
+# each thereafter, about 11 h for 25 iterations. Run AFTER v11a -- both saturate all four
+# GPUs, so running them together halves each rather than giving two for the price of one.
+name: v11b-af3-gated
+description: >
+  v8 reproduced with coordination geometry gated inside the loop and a wide-then-narrow
+  sample schedule. AF3 leads unrestrained (Rosetta forms the bond at relax); Boltz
+  cross-checks. The AF3 arm of v11, pairing with v11a.
+
+engine:
+  fold: af3
+  # FALSE, as v8. See the note above: AF3's only restraint mechanism inverts the stereocentre,
+  # and unrestrained it already lands at 2.31 A in 95% of predictions.
+  constrain_his_mg: false
+  cross_check: auto          # -> boltz
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+gates:
+  # Stated explicitly even though these are the GateConfig defaults, because this is the
+  # campaign the gate was built for and a reader should not have to go looking. They are the
+  # 90th percentile of 57 His-coordinated Mg-chlorophylls in the reference crystals.
+  axial_angle_max: 11.5
+  lonepair_angle_max: 17.0
+  mg_imidazole_oop_max: 12.7
+
+loop:
+  objective: ligand_plddt    # as v8. AF3 has no affinity head, so P(bind) is not available.
+  iterations: 25
+  top_backbones: 3
+
+  # Identical to v11a, so the two arms differ only in engine.
+  seed_per_backbone: 500
+  per_backbone: 200
+  sequences_sampled_at_once: 25

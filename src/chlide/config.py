@@ -176,6 +176,13 @@ class ConvergenceConfig(_Base):
 class LoopConfig(_Base):
     iterations: int = Field(ge=1)
     per_backbone: int = Field(ge=1, description='sequences sampled per promoted backbone')
+    # Seeding is a different problem from steady state and deserves its own width. Iteration 0
+    # starts from ONE backbone and its output seeds everything downstream, so starving it
+    # starves the whole run: v10 gave it 64 designs against v9's 500 and never recovered, 0.05
+    # ligand pLDDT behind for all 25 iterations. Sample wide until the queue holds
+    # top_backbones gate-passing candidates, then drop to per_backbone.
+    # None = no seed phase, use per_backbone throughout (every campaign before v11).
+    seed_per_backbone: int | None = Field(default=None, ge=1)
     top_backbones: int = Field(default=3, ge=1)
     sequences_sampled_at_once: int = Field(default=30, ge=1)
     objective: str = 'ligand_plddt'
@@ -184,6 +191,15 @@ class LoopConfig(_Base):
     @property
     def per_iteration(self) -> int:
         return self.per_backbone * self.top_backbones
+
+    @model_validator(mode='after')
+    def _check_seed(self) -> LoopConfig:
+        if self.seed_per_backbone is not None and self.seed_per_backbone < self.per_backbone:
+            raise ConfigError(
+                f'seed_per_backbone ({self.seed_per_backbone}) is below per_backbone '
+                f'({self.per_backbone}): the seed phase is meant to be WIDER than steady '
+                f'state, not narrower.')
+        return self
 
     @model_validator(mode='after')
     def _check(self) -> LoopConfig:
