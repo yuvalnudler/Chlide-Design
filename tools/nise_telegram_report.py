@@ -157,6 +157,17 @@ def cascade(df: pd.DataFrame) -> list:
         v = df[col]
         m = m & ((v < thr) if op == 'lt' else (v > thr)) & v.notna()
         out.append((label, int(m.sum())))
+
+    # v11 onward: the in-loop coordination-geometry gate, which is what decides promotion.
+    # Absent from older campaigns, whose driver never logged it.
+    for label, col, thr in [('axial angle <= 11.5 deg', 'axial_angle', 11.5),
+                            ('lone-pair <= 17 deg', 'his_lonepair_angle', 17.0),
+                            ('Mg off-imid <= 12.7 deg', 'mg_imidazole_oop', 12.7)]:
+        if col not in df:
+            continue
+        v = pd.to_numeric(df[col], errors='coerce')
+        m = m & (v <= thr) & v.notna()
+        out.append((label, int(m.sum())))
     return out
 
 
@@ -362,10 +373,21 @@ def make_plots(run_dir: Path, hist: dict, sm_hist: dict, out_dir: Path) -> list:
     # 4. Mg coordination -- the reason this campaign exists
     sits = sorted(sm_hist)
     if sits:
-        fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.2))
-        for ax_, col, lab, lo, hi in [
-                (axes[0], 'mg_ring_offset', 'Mg to chlorin N4 centroid (A)', None, IN_RING),
-                (axes[1], 'his_mg', 'His NE2 to Mg (A)', COORD_LO, COORD_HI)]:
+        # The distance alone is saturated by the shortlist stage and discriminates nothing;
+        # v9 held 2.4 A throughout while its histidine rotated 15 -> 40 deg. Show the angles
+        # beside it, with the experimental p90 as the target band.
+        panels = [('mg_ring_offset', 'Mg to chlorin N4 centroid (A)', None, IN_RING),
+                  ('his_mg', 'His NE2 to Mg (A)', COORD_LO, COORD_HI)]
+        first = sm_hist[sits[0]]
+        for col, lab, hi in [('axial_angle', 'axial angle (deg)', 11.5),
+                             ('his_lonepair_angle', 'lone-pair angle (deg)', 17.0),
+                             ('mg_imidazole_oop', 'Mg off-imidazole (deg)', 12.7)]:
+            if col in first:
+                panels.append((col, lab, 0.0, hi))
+        ncol = len(panels)
+        fig, axes = plt.subplots(1, ncol, figsize=(3.7 * ncol, 3.2))
+        axes = np.atleast_1d(axes)
+        for ax_, (col, lab, lo, hi) in zip(axes, panels):
             data = [sm_hist[i][col].dropna().values if col in sm_hist[i] else np.array([])
                     for i in sits]
             data = [d if len(d) else np.array([np.nan]) for d in data]

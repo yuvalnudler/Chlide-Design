@@ -182,7 +182,22 @@ def fig_cascade(casc: pd.DataFrame, n_pool: int, out: Path) -> Path | None:
         ('packstat > 0.55', cum.packstat > 0.55),
         ('apo-repack clashes = 0', cum.apo_clashes == 0),
         ('no buried charged residues', cum.buried_charged == 0),
+        # Coordination geometry, added in v11. Experimental p90 over 57 His-coordinated
+        # Mg-chlorophylls; skipped silently for campaigns whose cascade predates the columns.
+        # pd.to_numeric because read_cascade strips '#' comments and can leave these as
+        # object dtype, which compares as str and raises.
+        ('axial angle <= 11.5 deg',
+         pd.to_numeric(cum.axial_angle, errors='coerce') <= 11.5
+         if 'axial_angle' in cum else None),
+        ('lone-pair angle <= 17 deg',
+         pd.to_numeric(cum.his_lonepair_angle, errors='coerce') <= 17.0
+         if 'his_lonepair_angle' in cum else None),
+        ('Mg off-imidazole <= 12.7 deg',
+         pd.to_numeric(cum.mg_imidazole_oop, errors='coerce') <= 12.7
+         if 'mg_imidazole_oop' in cum else None),
     ]:
+        if mask is None:
+            continue
         cum = cum[mask.reindex(cum.index, fill_value=False)]
         stages.append((label, len(cum)))
 
