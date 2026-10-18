@@ -39,7 +39,11 @@ import pandas as pd
 
 PAE_MIN = 14.0
 XFOLD_LIG_MIN = 0.80
-REPORT_COLS = ['buns_score_paper', 'buns_ligand', 'buns_protein', 'buried_frac',
+# Mean pLDDT of the single chain folded by AF3: does the SEQUENCE fold, independent of the
+# engine that designed it. Same bar as every other pLDDT gate in the pipeline.
+AF3_MONO_MIN = 0.80
+REPORT_COLS = ['buns_score_paper', 'buns_ligand', 'buns_protein', 'af3_mono_plddt',
+               'buried_frac',
                'buried_frac_core', 'buried_frac_apolar', 'packstat', 'sasa_mg_A2',
                'ligand_plddt', 'protein_plddt', 'xfold_ligand_plddt', 'xfold_confidence',
                'interface_pae', 'his_mg', 'axial_angle', 'his_lonepair_angle',
@@ -66,6 +70,17 @@ def pick(df: pd.DataFrame, n: int, max_identity: float) -> tuple[pd.DataFrame, l
         log.append(f'two-copy interface pAE > {PAE_MIN:g}: {len(d)} kept ({before - len(d)} dropped)')
     else:
         log.append('two-copy interface pAE: NOT RUN for this campaign, not applied')
+    # The independent check is engine-dependent: an AF3-led campaign gets Boltz re-folding the
+    # complex (crossfold_*), a Boltz-led one gets AF3 folding the single chain (af3_mono).
+    # Gating only on the crossfold column meant Boltz-led campaigns had NO independent gate at
+    # all -- v9's order set was picked without one, and v7 never had an order set to notice it.
+    if 'af3_mono_plddt' in d.columns and d['af3_mono_plddt'].notna().any():
+        before = len(d)
+        d = d[d['af3_mono_plddt'].isna() | (d['af3_mono_plddt'] >= AF3_MONO_MIN)]
+        judged = int(d['af3_mono_plddt'].notna().sum())
+        log.append(f'AF3 monomer pLDDT >= {AF3_MONO_MIN}: {len(d)} kept '
+                   f'({before - len(d)} dropped; {judged} actually AF3-folded, '
+                   f'the rest unjudged and kept)')
     if 'xfold_ligand_plddt' in d.columns and d['xfold_ligand_plddt'].notna().any():
         before = len(d)
         d = d[d['xfold_ligand_plddt'].isna() | (d['xfold_ligand_plddt'] >= XFOLD_LIG_MIN)]
@@ -74,7 +89,9 @@ def pick(df: pd.DataFrame, n: int, max_identity: float) -> tuple[pd.DataFrame, l
                    f'({before - len(d)} dropped; {judged} of {len(d)} actually cross-folded, '
                    f'the rest unjudged and kept)')
     else:
-        log.append('cross-fold: no values for any design, not applied')
+        log.append('cross-fold (complex): no values for any design, not applied')
+    if 'af3_mono_plddt' not in d.columns or not d['af3_mono_plddt'].notna().any():
+        log.append('AF3 monomer: no values for any design, not applied')
 
     sort_cols, asc = ['buns_score_paper'], [True]
     if 'composite' in d.columns:

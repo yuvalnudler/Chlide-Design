@@ -130,9 +130,26 @@ def collect(run: Path, mr) -> dict:
     iters = run / 'input' / 'sampling_dataframes'
     out['iterations'] = len(list(iters.glob('iter_*_data.pkl'))) if iters.is_dir() else np.nan
 
-    orders = sorted((run / 'results' / 'final' / 'ORDER').glob('order*.csv')) \
-        if (run / 'results' / 'final' / 'ORDER').is_dir() else []
-    out['order'] = pd.read_csv(orders[0]) if orders else None
+    odir = run / 'results' / 'final' / 'ORDER'
+    orders = sorted(odir.glob('order*.csv')) if odir.is_dir() else []
+    o = pd.read_csv(orders[0]) if orders else None
+
+    # Campaigns whose cascade predates the geometry columns have none in their shortlist.
+    # Measure the ORDER structures directly instead, so every campaign is comparable on the
+    # one set that matters -- the designs you would actually synthesise.
+    if o is not None and 'his_lonepair_angle' not in o.columns:
+        mg = _load_module('metal_geometry')
+        geo = {}
+        for pdb in sorted(odir.glob('order*.pdb')):
+            g = mg.from_pdb(str(pdb))
+            if g:
+                geo[pdb.name.split('_', 1)[1][:-4]] = g
+        if geo:
+            for col in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+                        'mg_out_of_plane', 'n4_planarity'):
+                o[col] = o['name'].map({k: v.get(col) for k, v in geo.items()})
+            out['geometry_measured'] = True
+    out['order'] = o
     return out
 
 
@@ -249,8 +266,9 @@ def build(camps: list[dict]) -> str:
         if o is None or not len(o):
             continue
         cols = [x for x in ('name', 'buns_score_paper', 'buried_frac', 'buried_frac_core',
-                            'packstat', 'interface_pae', 'axial_angle',
-                            'his_lonepair_angle') if x in o.columns]
+                            'packstat', 'interface_pae', 'af3_mono_plddt', 'axial_angle',
+                            'his_lonepair_angle', 'mg_imidazole_oop',
+                            'n4_planarity') if x in o.columns]
         th = ''.join(f'<th class={"n" if x != "name" else ""}>{esc(x)}</th>' for x in cols)
         tr = ''
         for _, r in o.iterrows():
@@ -262,7 +280,10 @@ def build(camps: list[dict]) -> str:
                 else:
                     tds += f'<td class=n>{"-" if pd.isna(v) else f"{float(v):.2f}"}</td>'
             tr += f'<tr>{tds}</tr>'
-        orders += (f'<h3 style="font-size:.95rem;margin:18px 0 6px">{esc(c["name"])}</h3>'
+        note = (' <span style="font-weight:400;color:var(--mut);font-size:.8rem">'
+                '(geometry measured from the ORDER structures: this campaign\'s cascade '
+                'predates those columns)</span>') if c.get('geometry_measured') else ''
+        orders += (f'<h3 style="font-size:.95rem;margin:18px 0 6px">{esc(c["name"])}{note}</h3>'
                    f'<div class=scroll><table><thead><tr>{th}</tr></thead>'
                    f'<tbody>{tr}</tbody></table></div>')
 
