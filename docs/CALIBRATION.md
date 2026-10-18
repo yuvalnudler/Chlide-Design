@@ -282,3 +282,27 @@ Rosetta ligand params fix the chlorin's internal geometry — the loop **cannot*
 out of its ring plane. Experimental 5-coordinate Mg-chlorophyll domes 0.3–0.5 Å toward the
 axial ligand; our minimised poses sit at 0.09 Å and cannot reproduce that. Report it as a
 check that the ligand is intact; never read it as a finding about the designs.
+
+### Flag thresholds come from experimental structures, not from our own campaigns
+
+The advisory thresholds in `make_report.GEOMETRY_FLAGS` were first set from v8's own
+distribution, which put the axial bar at 8°. The experimental p90 is **11.5°**, so that bar
+fired inside the normal range and flagged **all eight** of v7's picks — the campaign with the
+most realistic coordination we have. Calibrating a threshold against your own output tells you
+only which of your runs differ from each other.
+
+They are now the 98th percentile of the 57 His-coordinated Mg-chlorophylls measured in
+`main_pipeline_v6/input/reference_structures/` (1M3X, 7COU), so a flag means *outside what
+nature does*:
+
+| measure | experimental median | p90 | p98 → **flag above** | max |
+|---|---|---|---|---|
+| `axial_angle` | 6.7° | 11.5 | **17** | 24.4 |
+| `his_lonepair_angle` | 10.9° | 17.1 | **19** | 52.9 |
+| `mg_imidazole_oop` | 6.0° | 12.7 | **17** | 17.9 |
+
+Effect on the order sets: v7 8→3 flagged, v8 1→1, v9 8→8. The thresholds now separate the
+campaigns the way the experimental data does, rather than the way v8 happened to.
+
+`tools/compare_campaigns.py --run ...` regenerates the experimental reference from the crystal
+structures, so these numbers can be rechecked rather than trusted.

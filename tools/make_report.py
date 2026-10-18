@@ -60,10 +60,17 @@ COLS = [
 
 # Advisory only. These are NOT in `composite` and do NOT change the ranking: nothing yet shows
 # they predict binding, and the paper's Fig 1c is a direct warning about adopting a principled-
-# looking geometric term as an objective. Thresholds are the rough upper quartile of v8's top 25.
-GEOMETRY_FLAGS = [('his_lonepair_angle', 25.0, 'lone pair poorly aimed at the Mg'),
-                  ('mg_imidazole_oop', 25.0, 'Mg far out of the imidazole plane'),
-                  ('axial_angle', 8.0, 'His off the ring axis')]
+# looking geometric term as an objective.
+#
+# Thresholds are the 98th percentile of 57 His-coordinated Mg-chlorophylls measured in the
+# reference crystal structures (1M3X, 7COU), so a flag means "outside what nature does", not
+# "worse than some campaign of ours". They were previously taken from v8's own distribution,
+# which put the axial bar at 8 degrees -- below the experimental p90 of 11.5 -- and flagged all
+# eight of v7's picks, the campaign with the most realistic coordination of any we have.
+# See docs/CALIBRATION.md.
+GEOMETRY_FLAGS = [('his_lonepair_angle', 19.0, 'lone pair poorly aimed at the Mg'),
+                  ('mg_imidazole_oop', 17.0, 'Mg far out of the imidazole plane'),
+                  ('axial_angle', 17.0, 'His off the ring axis')]
 
 
 def _engine(run: Path) -> str:
@@ -160,6 +167,7 @@ def load(run: Path) -> pd.DataFrame:
                 v = s['name'].map(sa[c])
                 s[c] = s[c].fillna(v) if c in s.columns else v
 
+    s = _measure_order_geometry(run, s)
     s = s.sort_values('buns_score_paper', kind='mergesort').reset_index(drop=True)
     s.insert(0, 'rank', np.arange(1, len(s) + 1))
     return s
@@ -182,6 +190,38 @@ def order_set(run: Path) -> tuple[list[str], str]:
     except (OSError, ValueError, KeyError):
         return [], ''
     return names, csvs[0].name
+
+
+def _measure_order_geometry(run: Path, df: pd.DataFrame) -> pd.DataFrame:
+    """Fill the coordination-geometry columns for campaigns whose cascade predates them.
+
+    v7 and v8 finished before these columns existed, so their reports showed no geometry at
+    all while v9's did -- and geometry is the measure that separates the campaigns. The ORDER
+    structures are on disk, so measure those: it covers exactly the designs anyone is deciding
+    about, without re-running a cascade over 11,000 designs.
+    """
+    cols = ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+            'mg_out_of_plane', 'n4_planarity')
+    if any(c in df.columns and df[c].notna().any() for c in cols):
+        return df                                   # the cascade already supplied them
+    odir = run / 'results' / 'final' / 'ORDER'
+    if not odir.is_dir():
+        return df
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_mgeo', str(Path(__file__).resolve().parent / 'metal_geometry.py'))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    geo = {}
+    for pdb in sorted(odir.glob('order*.pdb')):
+        g = mod.from_pdb(str(pdb))
+        if g:
+            geo[pdb.name.split('_', 1)[1][:-4]] = g
+    if not geo:
+        return df
+    for c in cols:
+        df[c] = df['name'].map({k: v.get(c) for k, v in geo.items()})
+    return df
 
 
 def order_reasons(df: pd.DataFrame, names: list[str]) -> dict[str, str]:
