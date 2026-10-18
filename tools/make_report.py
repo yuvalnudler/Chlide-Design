@@ -167,7 +167,7 @@ def load(run: Path) -> pd.DataFrame:
                 v = s['name'].map(sa[c])
                 s[c] = s[c].fillna(v) if c in s.columns else v
 
-    s = _measure_order_geometry(run, s)
+    s = _measure_geometry(run, s)
     s = s.sort_values('buns_score_paper', kind='mergesort').reset_index(drop=True)
     s.insert(0, 'rank', np.arange(1, len(s) + 1))
     return s
@@ -192,7 +192,7 @@ def order_set(run: Path) -> tuple[list[str], str]:
     return names, csvs[0].name
 
 
-def _measure_order_geometry(run: Path, df: pd.DataFrame) -> pd.DataFrame:
+def _measure_geometry(run: Path, df: pd.DataFrame) -> pd.DataFrame:
     """Fill the coordination-geometry columns for campaigns whose cascade predates them.
 
     v7 and v8 finished before these columns existed, so their reports showed no geometry at
@@ -204,19 +204,29 @@ def _measure_order_geometry(run: Path, df: pd.DataFrame) -> pd.DataFrame:
             'mg_out_of_plane', 'n4_planarity')
     if any(c in df.columns and df[c].notna().any() for c in cols):
         return df                                   # the cascade already supplied them
-    odir = run / 'results' / 'final' / 'ORDER'
-    if not odir.is_dir():
-        return df
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         '_mgeo', str(Path(__file__).resolve().parent / 'metal_geometry.py'))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # Prefer the cascade's minimised structure for EVERY shortlist design -- it is on disk for
+    # all of them. Measuring only the ORDER set left the shortlist table mostly blank (8 of
+    # v7's 33 rows), which reads as missing data rather than a column that was never run.
     geo = {}
-    for pdb in sorted(odir.glob('order*.pdb')):
-        g = mod.from_pdb(str(pdb))
-        if g:
-            geo[pdb.name.split('_', 1)[1][:-4]] = g
+    mdir = run / 'results' / 'cascade' / 'minimized'
+    if mdir.is_dir():
+        for name in df['name'].astype(str):
+            f = mdir / f'{name}_min.pdb'
+            if f.is_file():
+                g = mod.from_pdb(str(f))
+                if g:
+                    geo[name] = g
+    if not geo:                                   # fall back to the order structures
+        odir = run / 'results' / 'final' / 'ORDER'
+        for pdb in sorted(odir.glob('order*.pdb')) if odir.is_dir() else []:
+            g = mod.from_pdb(str(pdb))
+            if g:
+                geo[pdb.name.split('_', 1)[1][:-4]] = g
     if not geo:
         return df
     for c in cols:
@@ -354,7 +364,12 @@ def main() -> int:
                  ('ligand_plddt', f'{eng} lig', '{:.3f}', True),
                  ('xfold_ligand_plddt', f'{xeng} lig', '{:.3f}', True),
                  ('interface_pae', 'Dimer pAE', '{:.1f}', True),
-                 ('his_mg', 'His-Mg', '{:.2f}', False)]
+                 ('his_mg', 'His-Mg', '{:.2f}', False),
+                 # Reported and flagged, never ranked (docs/CALIBRATION.md). Experimental
+                 # medians across 57 real sites: axial 6.7, lone-pair 10.9, off-imid 6.0 deg.
+                 ('axial_angle', 'Axial', '{:.1f}', False),
+                 ('his_lonepair_angle', 'Lone-pair', '{:.1f}', False),
+                 ('mg_imidazole_oop', 'Off-imid', '{:.1f}', False)]
         ocols = [c for c in ocols if c[0] in df.columns]
         ohead = ''.join(f'<th class=n>{html.escape(lbl)}</th>' for _k, lbl, _f, _h in ocols)
         idx = df.set_index('name')
