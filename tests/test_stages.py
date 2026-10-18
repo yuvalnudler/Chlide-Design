@@ -229,3 +229,29 @@ def test_finish_at_iter_requires_an_explicit_run_dir():
                                capture_output=True, text=True)
     assert not_a_run.returncode != 0, 'the repo is not a campaign; it must fail fast'
     assert 'not a campaign run directory' in not_a_run.stderr
+
+
+def test_no_tool_looks_for_another_tool_under_the_run_directory():
+    """Tools live in the repo; run directories hold DATA. Repo campaigns have no <run>/tools,
+    so any path built as `run / 'tools' / ...` resolves to nothing and the call fails.
+
+    This exact mistake shipped four times in one day, each failing silently in the direction
+    that looks healthy:
+      * finish_at_iter.sh      cd $RUN then `tools/x.py`          -> all 11 harvest stages
+      * relax_pool.py          run / 'tools' / 'rosetta_relax.py' -> relaxed nothing, 18x "0s"
+      * finish_at_iter.sh      ls $RUN/run_nise_*.py              -> wrong cross-check engine
+      * relax_watcher.sh       (ported) same three                -> caught before shipping
+    """
+    import re
+    tools = Path(__file__).resolve().parents[1] / 'tools'
+    bad = []
+    pattern = re.compile(r"""(run|run_dir|RUN|R)\s*/\s*['"]tools['"]""")
+    for f in sorted(tools.glob('*.py')):
+        for n, line in enumerate(f.read_text().splitlines(), 1):
+            if line.lstrip().startswith('#'):
+                continue
+            if pattern.search(line):
+                bad.append(f'{f.name}:{n}: {line.strip()[:90]}')
+    assert not bad, (
+        'these build a tool path under the RUN directory, which does not exist:\n  '
+        + '\n  '.join(bad))

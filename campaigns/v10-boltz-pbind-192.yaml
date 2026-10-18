@@ -1,0 +1,88 @@
+# v10 -- v9 at the paper's own reduced sampling. A SINGLE-VARIABLE test of breadth.
+#
+# WHAT THE PAPER ACTUALLY SAYS. Three different numbers appear, and they are not
+# in conflict once you see which is which:
+#
+#   * Production protocol (main text): "n = 1,500 designs per iteration (n = 500
+#     for the first round)". This is what v5-v9 have always run. We match it exactly.
+#   * APEX, their best campaign (SI, "Comparing LASErMPNN and LigandMPNN within
+#     NISE"): "64 sequences sampled per backbone, temperature 0.5, binding site
+#     temperature 0.7" -- 64 x 3 backbones = 192 per iteration. Their 80 pM binder
+#     came out of the SMALLER setting, not the production one.
+#   * SI, "Runtime Quantification": "Using Boltz-1, we noticed that the number of
+#     sequences sampled per NISE iteration can be reduced to around 150 sequences
+#     per iteration (50 sequences per backbone) to observe SIMILAR QUALITY
+#     sequence/structure optimization taking around 40 min per iteration on one
+#     NVIDIA A4500."
+#
+# So the authors state outright that ~150/iteration is enough with Boltz, and
+# built their headline design at 192. We have never tested below 1,500.
+#
+# WHY 192 AND NOT 150 OR 200.
+#   200 is unreachable: the knob is per_backbone and there are 3 backbones, so
+#   200/3 = 66.67. 150 (50/backbone) is the paper's floor but splits 37.5 per GPU
+#   across our four cards. 192 is the only nearby value that divides cleanly on
+#   both axes -- 64 per backbone, 48 per GPU -- AND is the exact setting that
+#   produced APEX. 64 = 2 x 32, so sequences_sampled_at_once: 32 gives two whole
+#   LASErMPNN batches per backbone with no ragged tail.
+#
+# WHAT THIS BUYS. v9 ran 1,500/iteration in ~4 h 05 on four 4070 Ti. At 192 that
+# is ~31 min/iteration: 25 iterations in ~13 h instead of ~4 days. If quality
+# holds, every future campaign gets 7.8x cheaper and the chirality/orientation
+# experiments we keep deferring become affordable.
+#
+# WHAT WE ARE RISKING. v9's funnel was wide BECAUSE it was broad: 634 shortlist
+# survivors from 12,972 scored. At 192/iteration the pool is ~1,660 over 25
+# iterations rather than ~37,000, and the terminal cascade keeps only ~5.6% of
+# what it sees (the apo-clash gate alone removes 89%). Expect on the order of 90
+# survivors, not 634. The question is whether the BEST design is as good, not
+# whether there are as many -- the paper's claim is specifically about quality.
+#
+# ONE VARIABLE. Everything else is v9 verbatim: same ligand, scaffold, engine,
+# gates, objective, convergence rule. v9 vs v10 attributes any difference to
+# sampling breadth alone.
+#
+# HOW TO READ IT EARLY. Compare p90 ligand pLDDT and P(bind) at iterations 4-8
+# against v9's (v9: p90 0.959 / P(bind) 0.909 by iteration 8). If v10 tracks
+# within noise, the paper's claim holds here and 1,500 was waste. If it lags
+# badly by iteration 8, stop -- do not spend 25 iterations proving it.
+name: v10-boltz-pbind-192
+description: >
+  v9 reproduced exactly, at the paper's own reduced sampling: 64 sequences per
+  backbone (192/iteration) instead of 500 (1,500/iteration). Tests whether the
+  authors' "similar quality at ~150/iteration with Boltz" holds for a
+  Mg-chlorin, which is far outside the ligands they measured it on.
+
+ligand:
+  code: CLAOX
+  component: CLA-OXY
+  source: input/chlides_fixed.mmcif
+  deprotonated: true
+  required_config: S
+
+scaffold:
+  pdb: input/bdfp44_claox_his85_protonated.pdb
+  axial_his_resindex: 84
+
+engine:
+  fold: boltz
+  cross_check: auto          # -> af3
+  constrain_his_mg: true
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+loop:
+  objective: ligand_plddt_and_pbind    # as v9
+
+  # THE ONLY LINES THAT DIFFER FROM v9.
+  # 64 x 3 backbones = 192 per iteration = 48 per GPU on four cards.
+  per_backbone: 64
+  # 64 = 2 x 32: two whole LASErMPNN batches per backbone, no ragged tail.
+  sequences_sampled_at_once: 32
+
+  # Unchanged from v9 so the comparison stays single-variable. Note the
+  # convergence rule is a PLATEAU test on p90, not a count of designs, so it
+  # transfers to the smaller sampling without rescaling -- but p90 over 192
+  # designs is noisier than over 1,500, so a spurious plateau is more likely.
+  # min_iterations: 10 is what protects against stopping on that noise.
+  iterations: 25
+  top_backbones: 3

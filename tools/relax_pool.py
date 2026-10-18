@@ -184,7 +184,7 @@ def main() -> int:
         print(f'{len(todo)} design(s) pending across {len(by_iter)} iteration(s), '
               f'{a.workers} workers at nice {a.nice}')
 
-        new = existing = 0
+        new = existing = failed = 0
         write_header = not idx_path.is_file()
         with idx_path.open('a', newline='') as fh:
             w = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction='ignore')
@@ -194,8 +194,13 @@ def main() -> int:
                 paths = by_iter[it]
                 out_dir = root / f'iter_{it}'      # the /iter_N/ component is an API, see docstring
                 out_dir.mkdir(parents=True, exist_ok=True)
+                # rosetta_relax.py lives beside THIS file, in the repo -- not under the run
+                # directory. Repo campaigns have no <run>/tools, so the old path made every
+                # invocation fail instantly, and stderr=DEVNULL hid it: v9's harvest printed
+                # "iter N: X design(s) in 0s" eighteen times and produced nothing. It also
+                # silently neutered the relax watcher, whose whole job is to call this.
                 cmd = (['nice', f'-n{a.nice}', 'ionice', '-c3', ROSETTA_PY,
-                        str(run / 'tools' / 'rosetta_relax.py')]
+                        str(Path(__file__).resolve().parent / 'rosetta_relax.py')]
                        + [str(p) for p in paths]
                        + ['--params', str(params), '--out-dir', str(out_dir),
                           '--workers', str(a.workers), '--his-index', str(a.his_index),
@@ -203,7 +208,9 @@ def main() -> int:
                 t0 = time.time()
                 # stream: rosetta_relax prints one JSON per design with flush=True, so a kill
                 # partway through still leaves every completed design recorded
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                # stderr was DEVNULL, which is what let the failure above go unnoticed for a
+                # whole harvest. Keep it, but report a non-zero exit instead of swallowing it.
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, bufsize=1)
                 assert proc.stdout is not None
                 for line in proc.stdout:
@@ -223,11 +230,21 @@ def main() -> int:
                     fh.flush()
                     new += 1 if rec.get('ok') else 0
                 proc.wait()
-                ok = sum(1 for _ in paths)
-                print(f'  iter {it}: {len(paths)} design(s) in {time.time() - t0:.0f}s '
-                      f'-> {out_dir}')
+                if proc.returncode != 0:
+                    err = (proc.stderr.read() if proc.stderr else '').strip()
+                    print(f'  iter {it}: FAILED rc={proc.returncode} -- '
+                          f'{err.splitlines()[-1][:160] if err else "no stderr"}')
+                    failed += len(paths)
+                else:
+                    print(f'  iter {it}: {len(paths)} design(s) in {time.time() - t0:.0f}s '
+                          f'-> {out_dir}')
         print(f'\n{new} relaxed successfully; index now {len(load_index(idx_path))} rows')
         print(f'-> {idx_path}')
+        if failed:
+            # A relax pass that relaxed nothing must not look like success. The harvest and the
+            # watcher both branch on this.
+            print(f'ERROR: {failed} design(s) in failed batches -- nothing was relaxed for them')
+            return 1
     finally:
         lock.unlink(missing_ok=True)
     return 0
