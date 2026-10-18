@@ -137,6 +137,12 @@ def nise_params(cfg: CampaignConfig, run_dir: Path, *, debug: bool = False) -> d
         relax_r0=cfg.gates.metal_r0,
         relax_timeout=cfg.compute.relax_timeout,
         coordination_window=tuple(cfg.gates.coordination_window),
+        # In-loop coordination geometry. DesignCampaign.__init__ ends in **kwargs, so a key
+        # added here but not bound there is swallowed with no error -- the gate would look
+        # configured and do nothing. tests/test_loop.py asserts the binding.
+        axial_angle_max=cfg.gates.axial_angle_max,
+        lonepair_angle_max=cfg.gates.lonepair_angle_max,
+        mg_imidazole_oop_max=cfg.gates.mg_imidazole_oop_max,
 
         laser_inference_device=devices[0],
         laser_inference_dropout=True,                       # constant

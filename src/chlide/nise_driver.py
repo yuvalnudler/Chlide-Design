@@ -232,7 +232,9 @@ class DesignCampaign:
         align_on_binding_site, burial_mask_alpha_hull_alpha,
         relax_in_loop=False, relax_python=None, relax_params=None, relax_top_n=12,
         relax_workers=12, relax_r0=2.15, relax_timeout=1800,
-        coordination_window=(2.0, 2.6), **kwargs
+        coordination_window=(2.0, 2.6),
+        axial_angle_max=11.5, lonepair_angle_max=17.0, mg_imidazole_oop_max=12.7,
+        **kwargs
     ):
         self.debug = debug
         self.relax_in_loop = relax_in_loop
@@ -243,10 +245,21 @@ class DesignCampaign:
         self.relax_r0 = relax_r0
         self.relax_timeout = relax_timeout
         self.coordination_window = tuple(coordination_window)
+        # Coordination GEOMETRY, checked before promotion. The distance window above says the
+        # His is close enough; these say the bond is axial and the imidazole is turned the
+        # right way. Defaults are the experimental p90 (docs/CALIBRATION.md).
+        self.axial_angle_max = float(axial_angle_max)
+        self.lonepair_angle_max = float(lonepair_angle_max)
+        self.mg_imidazole_oop_max = float(mg_imidazole_oop_max)
+        self._geom_rejected = 0
+        self._geom_promoted = 0
+        self._geom_fallback_pool = []
         self._relax_round = 0
         if relax_in_loop:
             print(f'RELAX in loop: top {relax_top_n} candidates, His-Mg window '
                   f'{self.coordination_window[0]}-{self.coordination_window[1]} A, r0={relax_r0}')
+        print(f'GEOMETRY gate: axial <= {self.axial_angle_max} deg, lone-pair <= '
+              f'{self.lonepair_angle_max} deg, Mg-off-imidazole <= {self.mg_imidazole_oop_max} deg')
         self.ligand_3lc = ligand_3lc
         self.boltz_inference_devices = boltz_inference_devices
         self.use_boltz_conformer_potentials = use_boltz_conformer_potentials
@@ -429,6 +442,51 @@ class DesignCampaign:
         
         return sampled_proteins, sampled_sequences, laser_nll, laser_bs_nll
 
+    def coordination_geometry(self, prot_sel, lig_sel) -> dict:
+        """Axial-coordination geometry of a PREDICTION, before any relax.
+
+        The distance window the relax gate uses is saturated by the shortlist stage and
+        discriminates nothing; this says whether the bond is axial and whether the imidazole
+        is turned the right way. v9 walked its histidine from 15 to 40 degrees over eight
+        iterations with nothing watching, because a distance gate cannot see a rotation.
+
+        Pure numpy on atoms already in memory -- no Rosetta, no re-parsing. Returns {} rather
+        than raising if an atom is missing: this runs on every design and must never kill an
+        iteration.
+        """
+        try:
+            from metal_geometry import geometry, MG_NAMES, PYRROLE_NAMES
+            lnames = list(lig_sel.getNames())
+            lxyz = lig_sel.getCoords()
+            idx = {n: i for i, n in enumerate(lnames)}
+            pyr = next((g for g in PYRROLE_NAMES if all(x in idx for x in g)), None)
+            mgn = next((x for x in MG_NAMES if x in idx), None)
+            if pyr is None or mgn is None:
+                return {}
+            his = prot_sel.select(f'resnum {AXIAL_HIS_RESNUM}')
+            if his is None:
+                return {}
+            hat = {n: c for n, c in zip(his.getNames(), his.getCoords())}
+            if not all(a in hat for a in ('NE2', 'CE1', 'CD2')):
+                return {}
+            return geometry([lxyz[idx[x]] for x in pyr], lxyz[idx[mgn]],
+                            hat['NE2'], hat['CE1'], hat['CD2'])
+        except Exception:
+            return {}
+
+    def geometry_ok(self, geo: dict) -> bool:
+        """True when the prediction's coordination is inside the experimental p90 bounds.
+
+        An empty dict (atoms missing) passes: a measurement failure must not silently become a
+        rejection -- that would be a gate firing for the wrong reason, which is the exact
+        failure mode this whole gate exists to prevent.
+        """
+        if not geo:
+            return True
+        return (geo.get('axial_angle', 0.0) <= self.axial_angle_max
+                and geo.get('his_lonepair_angle', 0.0) <= self.lonepair_angle_max
+                and geo.get('mg_imidazole_oop', 0.0) <= self.mg_imidazole_oop_max)
+
     def relax_and_gate(self, ranked: list) -> list:
         """Rosetta-relax the leading candidates and keep those that actually coordinate the metal.
 
@@ -610,6 +668,16 @@ class DesignCampaign:
             all_buried_mask = compute_fast_ligand_burial_mask(boltz_prot.ca.getCoords(), boltz_coords[atoms_enforced_buried_mask], num_rays=5, alpha=self.burial_mask_alpha_hull_alpha)
             none_buried_mask = compute_fast_ligand_burial_mask(boltz_prot.ca.getCoords(), boltz_coords[atoms_enforced_exposed_mask], num_rays=5, alpha=self.burial_mask_alpha_hull_alpha)
             
+            # Measured for EVERY design and logged on every path: log_data columns must stay
+            # equal length or the per-iteration DataFrame is corrupt (see the chirality note
+            # above). The gate below skips only the promotion, never the logging.
+            geo = self.coordination_geometry(boltz_prot_only, boltz_lig_only)
+            geo_ok = self.geometry_ok(geo)
+            for _k in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+                       'mg_out_of_plane', 'n4_planarity'):
+                log_data[_k].append(geo.get(_k, float('nan')))
+            log_data['geometry_ok'].append(geo_ok)
+
             if (all_buried_mask.all().item() and (not none_buried_mask.any().item())) or self.debug:
                 log_data['ligand_is_buried'].append(True)
                 if (ligand_rmsd < self.self_consistency_ligand_rmsd_threshold and protein_rmsd < self.self_consistency_protein_rmsd_threshold) or self.debug:
@@ -636,8 +704,17 @@ class DesignCampaign:
                         pr.writePDB(pdb_output_path, boltz_prot_only.copy() + ligand_prody)
 
                     score = compute_objective_function(confidence_data, self.objective_function)
-                    self.backbone_to_best_generation[bb_path] = max(score, self.backbone_to_best_generation[bb_path])
-                    self.backbone_queue.append((pdb_output_path, score))
+                    if geo_ok:
+                        self._geom_promoted += 1
+                        self.backbone_to_best_generation[bb_path] = max(score, self.backbone_to_best_generation[bb_path])
+                        self.backbone_queue.append((pdb_output_path, score))
+                    else:
+                        # Not promoted, and deliberately NOT recorded in
+                        # backbone_to_best_generation either -- that dict feeds the
+                        # keep_best_generator_backbone rescue below, which would otherwise
+                        # reintroduce exactly what this gate excluded.
+                        self._geom_rejected += 1
+                        self._geom_fallback_pool.append((pdb_output_path, score))
             else:
                 log_data['ligand_is_buried'].append(False)
         
@@ -655,6 +732,24 @@ class DesignCampaign:
                       '"unverified", tools/ligand_chirality.py is failing to find the centre, '
                       'not the predictions failing to form it.', flush=True)
 
+        n_geom_rejected, self._geom_rejected = self._geom_rejected, 0
+        if n_geom_rejected:
+            print(f'GEOMETRY: {n_geom_rejected} design(s) not promoted -- coordination outside '
+                  f'axial<={self.axial_angle_max}/lonepair<={self.lonepair_angle_max}/'
+                  f'offimid<={self.mg_imidazole_oop_max} deg', flush=True)
+
+        n_geom_promoted, self._geom_promoted = self._geom_promoted, 0
+        # The queue CARRIES OVER between iterations, so it is almost never empty -- the real
+        # failure is not an empty queue but a stagnant one, where the gate rejects every new
+        # candidate and the loop re-designs the same carried-over backbones forever. That is
+        # what this tests: nothing NEW got through.
+        if n_geom_promoted == 0 and n_geom_rejected:
+            print(f'GEOMETRY: *** FALLBACK *** no new design passed the geometry gate this '
+                  f'iteration ({n_geom_rejected} rejected). Promoting those on score alone; '
+                  f'THIS ITERATION IS UNGATED.', flush=True)
+            for _p, _sc in self._geom_fallback_pool:
+                self.backbone_queue.append((_p, _sc))
+        self._geom_fallback_pool = []
         ranked = sorted(self.backbone_queue, key=lambda x: float(x[1]), reverse=True)
         if self.relax_in_loop and ranked:
             ranked = self.relax_and_gate(ranked)

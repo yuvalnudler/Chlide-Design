@@ -231,6 +231,19 @@ class GateConfig(_Base):
     dimer_pae_grey_band: float = Field(default=9.0, gt=0)
     dimer_contact_cutoff: float = Field(default=5.0, gt=0, description='CB-CB, Angstrom')
 
+    # COORDINATION GEOMETRY, enforced in the loop as well as the cascade. The His-Mg DISTANCE
+    # window above is saturated by the shortlist stage and discriminates nothing; these three
+    # describe whether the bond is actually axial and whether the imidazole is turned the right
+    # way. Defaults are the 90th percentile of 57 His-coordinated Mg-chlorophylls measured in
+    # the reference crystals (1M3X, 7COU) -- see docs/CALIBRATION.md.
+    #
+    # v9 optimised ligand pLDDT + P(bind) and walked its histidine from 15 to 40 degrees over
+    # eight iterations, ending with 0.6% of its pool inside these bounds. Nothing was watching,
+    # because a distance gate cannot see a rotation.
+    axial_angle_max: float = Field(default=11.5, gt=0, le=90)
+    lonepair_angle_max: float = Field(default=17.0, gt=0, le=90)
+    mg_imidazole_oop_max: float = Field(default=12.7, gt=0, le=90)
+
     @model_validator(mode='after')
     def _check(self) -> GateConfig:
         lo, hi = self.coordination_window
@@ -241,6 +254,14 @@ class GateConfig(_Base):
                 f'metal_r0 {self.metal_r0} lies outside coordination_window '
                 f'{self.coordination_window}: the restraint would pull every design to a '
                 f'distance the gate then rejects.')
+        # A geometry bound tighter than the experimental MEDIAN rejects most real sites.
+        for name, value, median in (('axial_angle_max', self.axial_angle_max, 6.7),
+                                    ('lonepair_angle_max', self.lonepair_angle_max, 10.9),
+                                    ('mg_imidazole_oop_max', self.mg_imidazole_oop_max, 6.0)):
+            if value < median:
+                raise ConfigError(
+                    f'{name} {value} is below the experimental median {median} deg: the gate '
+                    f'would reject more than half of real His-coordinated Mg-chlorophylls.')
         if self.dimer_pae_grey_band > self.dimer_interface_pae:
             raise ConfigError(
                 f'dimer_pae_grey_band ({self.dimer_pae_grey_band}) exceeds '

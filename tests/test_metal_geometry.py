@@ -139,3 +139,80 @@ def test_measures_never_raise_on_missing_atoms():
     assert mg.his_second_shell({}, np.zeros((0, 3)), [], [], [], 85)['his_nd1_ok'] is False
     out = mg.polar_contacts([], np.zeros((0, 3)), [], [], np.zeros((0, 3)), [], [], [])
     assert out['unpaired_buried_count'] == 0
+
+
+# --------------------------------------------------------------- the in-loop gate
+
+def _campaign_stub():
+    """The gate predicate, lifted off DesignCampaign without constructing one."""
+    from chlide import nise_driver as nd
+
+    class Stub:
+        axial_angle_max, lonepair_angle_max, mg_imidazole_oop_max = 11.5, 17.0, 12.7
+        coordination_geometry = nd.DesignCampaign.coordination_geometry
+        geometry_ok = nd.DesignCampaign.geometry_ok
+    return Stub()
+
+
+@pytest.mark.parametrize('geo,expected,why', [
+    ({}, True, 'missing atoms must PASS: a measurement failure must never masquerade as a '
+               'rejection, which is the failure mode this gate exists to prevent'),
+    ({'axial_angle': 5, 'his_lonepair_angle': 10, 'mg_imidazole_oop': 6}, True, 'good'),
+    ({'axial_angle': 5, 'his_lonepair_angle': 40, 'mg_imidazole_oop': 6}, False, "v9's drift"),
+    ({'axial_angle': 20, 'his_lonepair_angle': 10, 'mg_imidazole_oop': 6}, False, 'axial'),
+    ({'axial_angle': 5, 'his_lonepair_angle': 10, 'mg_imidazole_oop': 35}, False, 'off-imid'),
+    ({'axial_angle': 11.5, 'his_lonepair_angle': 17.0, 'mg_imidazole_oop': 12.7}, True,
+     'exactly at the bounds is inside them'),
+])
+def test_geometry_gate_predicate(geo, expected, why):
+    assert _campaign_stub().geometry_ok(geo) is expected, why
+
+
+def test_gate_thresholds_reach_the_driver():
+    """DesignCampaign.__init__ ends in **kwargs, so a key passed in nise_params but not bound
+    there is swallowed with no error -- the gate would look configured and do nothing."""
+    import inspect
+    from chlide.config import load_campaign
+    from chlide.loop import nise_params
+    from chlide import nise_driver
+    cfg = load_campaign(ROOT / 'campaigns' / 'v7-boltz-coo.yaml')
+    params = nise_params(cfg, Path('/tmp/unused'))
+    bound = set(inspect.signature(nise_driver.DesignCampaign.__init__).parameters)
+    for k in ('axial_angle_max', 'lonepair_angle_max', 'mg_imidazole_oop_max'):
+        assert k in params, f'{k} missing from nise_params'
+        assert k in bound, f'{k} passed but not bound in __init__ -- silently swallowed'
+
+
+def test_gate_rejects_v9_and_passes_v7_on_real_predictions():
+    """The gate must separate the campaigns the way the analysis did: v7 around 60% of
+    predictions pass, v9 around 14%. Exact figures move with sampling, so this asserts the
+    separation rather than a point value."""
+    import glob
+    import random
+    warnings.filterwarnings('ignore')
+    import prody as pr
+    pr.confProDy(verbosity='none')
+    f = _campaign_stub()
+    rates = {}
+    for tag in ('v7', 'v9'):
+        files = glob.glob(f'{CAMPAIGNS[tag]}/input/sampled_backbones/iter_*/**/*_model_0.pdb',
+                          recursive=True)
+        if not files:
+            pytest.skip(f'{tag} predictions absent')
+        random.seed(0)
+        ok = tot = 0
+        for p in random.sample(files, min(150, len(files))):
+            ag = pr.parsePDB(p)
+            prot = ag.select('chid A') if ag is not None else None
+            lig = ag.select('chid B and not hydrogen') if ag is not None else None
+            if prot is None or lig is None:
+                continue
+            geo = f.coordination_geometry(prot, lig)
+            if not geo:
+                continue
+            tot += 1
+            ok += bool(f.geometry_ok(geo))
+        rates[tag] = ok / tot
+    assert rates['v7'] > 0.45, f"v7 should mostly pass, got {rates['v7']:.1%}"
+    assert rates['v9'] < 0.25, f"v9 should mostly fail, got {rates['v9']:.1%}"
+    assert rates['v7'] > 2 * rates['v9'], 'the gate must separate the two campaigns'
