@@ -90,6 +90,129 @@ def geometry(n4, mg, ne2, ce1, cd2) -> dict:
     }
 
 
+# ---------------------------------------------------------------- report-only measures
+#
+# Everything below is REPORTED, never gated. They exist so v12 can decide from data; see the
+# v11 plan. All are heavy-atom only: Boltz and AF3 emit no protein hydrogens, and the driver's
+# in-loop protonation covers the ligand alone.
+
+LIGAND_POLAR_O = ('OBD1', 'OD1', 'OD2', 'OCD1', 'OA1', 'OA2')
+PROPIONATE = ('CGA1', 'OA1', 'OA2')
+# Side-chain and backbone donors. Heavy atoms only, so a "donor" here is an N or an -OH oxygen
+# that carries a hydrogen in reality; we cannot see the hydrogen to confirm it.
+PROTEIN_DONORS = frozenset({'N', 'OG', 'OG1', 'OH', 'ND1', 'ND2', 'NE', 'NE1', 'NE2',
+                            'NH1', 'NH2', 'NZ', 'OW'})
+HBOND_MAX = 3.2          # heavy-atom donor...acceptor
+BURIED_SASA = 5.0        # A^2, per atom, below which we call a ligand oxygen buried
+PROP_SASA_MIN = 15.0     # A^2 summed over the propionate before we stop worrying about it
+
+
+def his_second_shell(his_atoms: dict, protein_xyz, protein_names, protein_resnames,
+                     protein_resnums, his_resnum: int) -> dict:
+    """Does the axial His ND1 have an acceptor behind it?
+
+    The coordinating nitrogen is NE2; ND1 is the far one, and in a real site it donates its
+    proton to a nearby carbonyl, which fixes the imidazole's rotation. Measured in our ordered
+    designs: v7 8/8 and v9 8/8 (both residue 81 backbone O), v10 7/8, v8 0/8.
+
+    REPORTED, NOT GATED -- it does not predict orientation. v8 lacks it in all eight designs
+    and still has the best coordination geometry of any campaign.
+
+    `his_atoms` needs ND1 and at least one of CG/CE1 (to fix the donor direction).
+    Returns NaN distance and False flags when there is no partner, never raises.
+    """
+    out = {'his_nd1_partner_dist': float('nan'), 'his_nd1_partner_angle': float('nan'),
+           'his_nd1_partner': '', 'his_nd1_ok': False, 'his_nd1_strained': False}
+    nd1 = his_atoms.get('ND1')
+    ref = his_atoms.get('CG', his_atoms.get('CE1'))
+    if nd1 is None or ref is None:
+        return out
+    nd1 = np.asarray(nd1, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    pxyz = np.asarray(protein_xyz, dtype=float)
+    # acceptors: any protein oxygen NOT in the histidine itself
+    cand = [i for i, n in enumerate(protein_names)
+            if n and n[0] == 'O' and int(protein_resnums[i]) != int(his_resnum)]
+    if not cand:
+        return out
+    d = np.linalg.norm(pxyz[cand] - nd1, axis=1)
+    j = int(d.argmin())
+    if d[j] > HBOND_MAX:
+        return out
+    i = cand[j]
+    out['his_nd1_partner_dist'] = float(d[j])
+    out['his_nd1_partner_angle'] = _ang(_unit(ref - nd1), _unit(pxyz[i] - nd1))
+    out['his_nd1_partner'] = f'{protein_resnames[i]}{protein_resnums[i]}.{protein_names[i]}'
+    # 2.6 A floor because real designs sit at 2.47-2.53; a bare "within 3.2" calls those a pass
+    out['his_nd1_strained'] = bool(d[j] < 2.6)
+    out['his_nd1_ok'] = bool(2.6 <= d[j] <= HBOND_MAX and out['his_nd1_partner_angle'] >= 100.0)
+    return out
+
+
+def _nearest_partner(point, pxyz, pnames, presnames, presnums, donors_only=False):
+    """Closest protein donor/acceptor heavy atom to `point` within HBOND_MAX."""
+    idx = [i for i, n in enumerate(pnames)
+           if n and ((n in PROTEIN_DONORS) if donors_only else (n[0] == 'O' or n in PROTEIN_DONORS))]
+    if not idx:
+        return float('nan'), ''
+    d = np.linalg.norm(np.asarray(pxyz)[idx] - np.asarray(point, dtype=float), axis=1)
+    j = int(d.argmin())
+    if d[j] > HBOND_MAX:
+        return float('nan'), ''
+    i = idx[j]
+    return float(d[j]), f'{presnames[i]}{presnums[i]}.{pnames[i]}'
+
+
+def polar_contacts(lig_names, lig_xyz, lig_sasa_complex, lig_sasa_alone,
+                   protein_xyz, protein_names, protein_resnames, protein_resnums) -> dict:
+    """Per-ligand-oxygen burial and whether anything is there to satisfy it.
+
+    Reports burial BOTH ways on purpose. An earlier analysis used a contact-count proxy and
+    concluded OBD1 was buried in 24/24 ordered designs; real per-atom SASA puts it at 22-38
+    A^2 -- solvent-facing in every campaign. The two definitions must not be conflated again.
+    The cascade's existing `buried_frac*` columns are the RELATIVE measure, over atom groups.
+
+    What the finished campaigns actually show: OD2 is buried (1-8 A^2) in all four and paired
+    in none, and OCD1 separates the engines -- v9 buried 8/8 and paired 8/8 (ASN84.ND2), v8
+    buried 6/8 and paired 0.
+    """
+    out, unpaired, props = {}, 0, []
+    for k, name in enumerate(lig_names):
+        if name in PROPIONATE:
+            props.append(float(lig_sasa_complex[k]))
+        if name not in LIGAND_POLAR_O:
+            continue
+        sc = float(lig_sasa_complex[k])
+        alone = float(lig_sasa_alone[k]) if lig_sasa_alone is not None else float('nan')
+        rel = float(1 - sc / alone) if alone and alone > 1e-9 else float('nan')
+        dist, who = _nearest_partner(lig_xyz[k], protein_xyz, protein_names,
+                                     protein_resnames, protein_resnums)
+        buried = sc < BURIED_SASA
+        out[f'sasa_{name}'] = sc
+        out[f'relburial_{name}'] = rel
+        out[f'partner_{name}'] = who
+        out[f'partner_dist_{name}'] = dist
+        if buried and not who:
+            unpaired += 1
+    out['unpaired_buried_count'] = unpaired
+
+    # propionate: charged, deliberately solvent-exposed. A tripwire, not a target.
+    prop_sasa = float(sum(props)) if props else float('nan')
+    pd_, pwho = float('nan'), ''
+    for k, name in enumerate(lig_names):
+        if name in ('OA1', 'OA2'):
+            d, w = _nearest_partner(lig_xyz[k], protein_xyz, protein_names,
+                                    protein_resnames, protein_resnums, donors_only=True)
+            if d == d and (pd_ != pd_ or d < pd_):
+                pd_, pwho = d, w
+    out['prop_sasa'] = prop_sasa
+    out['prop_donor_dist'] = pd_
+    out['prop_donor'] = pwho
+    out['prop_ok'] = bool((prop_sasa == prop_sasa and prop_sasa >= PROP_SASA_MIN)
+                          or pd_ == pd_)
+    return out
+
+
 def from_pose(pose, his_index: int, li: int, mg_i: int) -> dict:
     """PyRosetta adapter, for polizzi_cascade.py. Returns {} rather than raising if an atom is
     missing, so a cascade row is never lost to a geometry failure."""
