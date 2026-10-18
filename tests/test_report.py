@@ -119,10 +119,28 @@ def test_every_pick_has_a_reason(v8_html):
     assert all(w.strip() for w in whys), 'a pick rendered with an empty rationale'
 
 
-def test_order_section_absent_without_an_order_dir(v7_html):
-    """v7 has no ORDER/ -- the section must not render at all, not render empty."""
-    assert 'Suggested order' not in v7_html
-    assert 'class=pick' not in v7_html
+def test_order_section_absent_without_an_order_dir(tmp_path):
+    """A campaign with no ORDER/ must omit the section entirely, not render it empty.
+
+    This used v7 as the example of a campaign without one -- until v7 was given an order
+    set and the test failed for a reason that had nothing to do with the behaviour it
+    guards. A test of "what happens when X is absent" must construct the absence, not
+    borrow it from live data that can legitimately change.
+    """
+    run = tmp_path / 'run'
+    (run / 'results' / 'final').mkdir(parents=True)
+    (run / 'results' / 'cascade').mkdir(parents=True)
+    (run / 'results' / 'cascade' / 'cascade_metrics.csv').write_text(
+        'name,packstat,apo_clashes,buried_charged\n'
+        'iter1_chunk_0_seq_1_model_0,0.66,0,0\n')
+    (run / 'results' / 'final' / 'shortlist.csv').write_text(
+        'name,iteration,buns_score_paper,buns_ligand,buns_protein,packstat,his_mg,'
+        'buried_frac,buried_frac_core,sequence,output\n'
+        'iter1_chunk_0_seq_1_model_0,1,6,0,6,0.66,2.43,0.71,0.88,ACDE,o.pdb\n')
+    assert not (run / 'results' / 'final' / 'ORDER').exists()
+    html_out = _render(run, tmp_path / 'out.html')
+    assert 'Suggested order' not in html_out
+    assert 'class=pick' not in html_out
 
 
 # ------------------------------------------------------------------ migrated tool wiring
