@@ -356,8 +356,19 @@ def test_relax_watcher_script_exists_and_refuses_non_campaign_dirs(tmp_path):
     repo = sh.parent.parent
     r = run('--run-dir', str(repo))
     assert r.returncode != 0, 'the repo is not a campaign, even though it has input/'
-    assert 'sampling_dataframes' in r.stderr
+    assert 'run_manifest' in r.stderr
     assert run('--run-dir', str(tmp_path / 'nope')).returncode != 0
+
+    # ...but a REAL run directory must be accepted the moment it is created, before any
+    # iteration has finished. The first guard tested input/sampling_dataframes/, which only
+    # appears after iteration 0, so it refused at exactly the point the launcher starts it --
+    # v10's watcher died on launch. run_manifest.json is written before the driver starts.
+    fresh = tmp_path / 'fresh'
+    (fresh / 'input').mkdir(parents=True)
+    (fresh / 'run_manifest.json').write_text('{}')
+    r = run('--run-dir', str(fresh), '--parent-pid', '1', '--interval', '1')
+    assert 'not a campaign run directory' not in r.stderr, \
+        'a freshly created run directory must be accepted'
 
 
 def test_relax_watcher_exits_instead_of_spinning_when_relax_pool_keeps_failing(tmp_path):

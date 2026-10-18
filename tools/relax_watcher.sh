@@ -37,8 +37,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$RUN" ] || { echo "[fatal] no run directory: pass --run-dir or set CHLIDE_RUN_DIR" >&2; exit 2; }
 RUN=$(cd "$RUN" 2>/dev/null && pwd) || { echo "[fatal] run dir does not exist: $RUN" >&2; exit 2; }
-[ -d "$RUN/input/sampling_dataframes" ] || {
-  echo "[fatal] $RUN is not a campaign run directory (no input/sampling_dataframes/)" >&2
+# A campaign is identified by its manifest, which run_campaign writes BEFORE the driver
+# starts. input/sampling_dataframes/ only appears once iteration 0 completes, so testing for
+# it refused the watcher at the one moment the launcher legitimately starts it -- which is
+# exactly what happened on v10's first launch. The repo has neither marker.
+[ -f "$RUN/run_manifest.json" ] || [ -d "$RUN/input/sampling_dataframes" ] || {
+  echo "[fatal] $RUN is not a campaign run directory (no run_manifest.json)" >&2
   exit 2; }
 
 # One watcher per run. relax_pool locks internally, but two watchers double the CPU this is

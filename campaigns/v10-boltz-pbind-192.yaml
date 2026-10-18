@@ -53,17 +53,6 @@ description: >
   authors' "similar quality at ~150/iteration with Boltz" holds for a
   Mg-chlorin, which is far outside the ligands they measured it on.
 
-ligand:
-  code: CLAOX
-  component: CLA-OXY
-  source: input/chlides_fixed.mmcif
-  deprotonated: true
-  required_config: S
-
-scaffold:
-  pdb: input/bdfp44_claox_his85_protonated.pdb
-  axial_his_resindex: 84
-
 engine:
   fold: boltz
   cross_check: auto          # -> af3

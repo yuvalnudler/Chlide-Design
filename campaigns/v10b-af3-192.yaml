@@ -1,0 +1,78 @@
+# v10b -- v8 at the paper's reduced sampling. The AF3 arm of the breadth test.
+#
+# PAIRS WITH v10. v10 asks whether 192 sequences per iteration is enough for a
+# Boltz-led run; v10b asks the same of AF3. Each is single-variable against its
+# own full-scale predecessor:
+#
+#     engine   sampling   objective          campaign
+#     Boltz    1500       pLDDT              v7
+#     Boltz    1500       pLDDT + P(bind)    v9
+#     Boltz     192       pLDDT + P(bind)    v10     <- v9 vs v10 = breadth
+#     AF3      1500       pLDDT              v8
+#     AF3       192       pLDDT              v10b    <- v8 vs v10b = breadth
+#
+# NO P(bind) HERE, AND THAT IS NOT A CHOICE. The affinity head is a Boltz-2
+# component; AF3 has no equivalent. v10b therefore optimises ligand pLDDT alone,
+# exactly as v8 did, which is what makes v8 vs v10b clean. It also means v10 and
+# v10b differ in BOTH engine and objective, so that particular pair is not a
+# controlled comparison -- use v8 vs v10b and v9 vs v10 for the breadth question,
+# and v7 vs v8 for the engine question.
+#
+# WHY THIS IS AN EXTRAPOLATION. The paper's claim is specifically about Boltz-1:
+# "Using Boltz-1, we noticed that the number of sequences sampled per NISE
+# iteration can be reduced to around 150 sequences per iteration (50 sequences
+# per backbone) to observe similar quality sequence/structure optimization."
+# They never ran AF3 in NISE at all. Nothing in the paper says the same holds
+# for a different structure predictor, and we already know AF3 behaves
+# differently enough that gates do not transfer between the two -- ligand pLDDT
+# median 0.865 under Boltz against 0.753 under AF3 on the SAME designs, r = +0.13
+# to +0.18. See docs/ENGINES.md.
+#
+# THE SPECIFIC RISK FOR AF3, AND IT IS WORSE THAN FOR BOLTZ. AF3 honours the
+# 13-2 stereocentre only ~59% of the time on designed sequences -- it reads
+# pdbx_stereo_config and nothing else, where Boltz takes 12 explicit
+# ChiralAtomPotential constraints and lands 100% S (v9 logged "CHIRALITY:
+# 1500/1500 at S" every iteration). So AF3's EFFECTIVE sampling is already only
+# ~59% of nominal: 1500 -> ~885 usable, and 192 -> ~113. Reducing breadth costs
+# AF3 roughly 1.7x more than it costs Boltz, and 113 usable designs per
+# iteration is below the paper's 150 floor even though 192 is above it.
+#
+#   If v10b underperforms v8 while v10 matches v9, the chirality yield is the
+#   first thing to check -- not the breadth claim. Read the per-iteration
+#   CHIRALITY line before concluding anything about sampling.
+#
+# WHY RUN IT ANYWAY. AF3-led v8 is still our best campaign on BUNs by a wide
+# margin (best 6 against 10 and 12), and at 1.07 h per iteration measured, 192
+# brings an AF3 run to roughly 8 min per iteration -- about 3.5 h for 25
+# iterations. That is cheap enough that a negative result costs almost nothing,
+# and a positive one makes AF3 campaigns effectively free to repeat.
+#
+# ALSO WORTH KNOWING. constrain_his_mg stays FALSE, as in v8: AF3 has no
+# two-sided restraint, and bondedAtomPairs crushes the His-Mg distance to 1.50 A
+# and flips the 13-2 centre to R. Rosetta forms the bond during relax instead
+# (4.22 -> 2.50 A). Do not "fix" this by turning the flag on.
+name: v10b-af3-192
+description: >
+  v8 reproduced exactly, at 64 sequences per backbone (192/iteration) instead of
+  500 (1,500/iteration). The AF3 arm of the sampling-breadth test, pairing with
+  v10 on the Boltz side. Objective stays ligand pLDDT because AF3 has no
+  affinity head.
+
+engine:
+  fold: af3
+  cross_check: auto           # -> boltz
+  # FALSE, as v8. AF3 cannot hold the two-sided 2.0-2.6 A window; bondedAtomPairs
+  # crushes the bond to 1.50 A and inverts the stereocentre. Rosetta forms it in relax.
+  constrain_his_mg: false
+  devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+
+loop:
+  # THE ONLY LINES THAT DIFFER FROM v8.
+  # 64 x 3 backbones = 192 per iteration = 48 per GPU on four cards.
+  per_backbone: 64
+  # 64 = 2 x 32: two whole LASErMPNN batches per backbone, no ragged tail.
+  sequences_sampled_at_once: 32
+
+  # Unchanged from v8 (which inherits all of these from _base.yaml).
+  iterations: 25
+  top_backbones: 3
