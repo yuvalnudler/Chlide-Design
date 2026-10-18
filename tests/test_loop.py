@@ -405,3 +405,46 @@ def test_disabled_watcher_starts_nothing():
     cfg = SimpleNamespace(compute=SimpleNamespace(relax_pool_watcher=False))
     assert _start_relax_watcher(cfg, Path('/tmp'), log) is None
     assert events and events[0]['event'] == 'relax_watcher_disabled'
+
+
+def test_telegram_reporter_is_started_by_the_launch_path_and_defaults_on():
+    """v10 launched with no reporter attached; nobody would have known until the first
+    iteration finished in silence. Same shape as the relax watcher -- something the old
+    per-campaign workflow started by hand that `chlide run` never picked up."""
+    from chlide.config import load_campaign
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_campaign(root / 'campaigns' / 'v10-boltz-pbind-192.yaml')
+    assert cfg.notify.telegram is True
+    assert (root / 'tools' / 'nise_telegram_report.py').is_file()
+    src = (root / 'src' / 'chlide' / 'loop.py').read_text()
+    assert '_start_telegram_reporter' in src
+    assert 'nise_telegram_report.py' in src, 'the launch path must name the reporter'
+
+
+def test_disabled_telegram_starts_nothing():
+    from types import SimpleNamespace
+    from chlide.loop import _start_telegram_reporter
+    events = []
+    log = SimpleNamespace(emit=lambda **kw: events.append(kw))
+    cfg = SimpleNamespace(notify=SimpleNamespace(telegram=False))
+    assert _start_telegram_reporter(cfg, Path('/tmp'), log) is None
+    assert events and events[0]['event'] == 'telegram_reporter_disabled'
+
+
+def test_credentials_are_never_in_the_repo_or_on_a_command_line():
+    """Telegram credentials live in ~/.config/pipeline_telegram.env, mode 0600. They must not
+    appear in config, in a campaign, or as a CLI argument anywhere in the repo."""
+    import re
+    root = Path(__file__).resolve().parents[1]
+    bad = []
+    tok = re.compile(r'\b\d{8,10}:[A-Za-z0-9_-]{30,}\b')          # bot token shape
+    for f in list(root.glob('**/*.py')) + list(root.glob('**/*.yaml')) + list(root.glob('**/*.sh')):
+        if '.git' in f.parts or '__pycache__' in f.parts:
+            continue
+        txt = f.read_text(errors='ignore')
+        if tok.search(txt):
+            bad.append(f'{f.relative_to(root)}: looks like a bot token')
+        for pat in ('--bot-token', '--chat-id', 'TELEGRAM_BOT_TOKEN='):
+            if pat in txt and 'pipeline_telegram.env' not in txt:
+                bad.append(f'{f.relative_to(root)}: passes {pat}')
+    assert not bad, '\n  '.join(bad)

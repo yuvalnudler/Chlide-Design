@@ -297,6 +297,26 @@ class ComputeConfig(_Base):
                     "UNRELAXED structures -- changing the trajectory for a background job.")
 
 
+class NotifyConfig(_Base):
+    """Per-iteration Telegram reporting.
+
+    Started by `chlide run`, for the same reason the relax watcher is: it used to be launched
+    by hand beside each campaign, and v10 ran with no reporter at all until someone asked
+    whether Telegram was pointed at it. Nothing fails when it is missing -- you simply stop
+    hearing from a run that is otherwise fine, which is the worst way for it to break.
+
+    Credentials are NOT config. They live in ~/.config/pipeline_telegram.env (mode 0600) and
+    are read by chlide.notify; nothing here, in the repo, or on a command line ever holds them.
+    """
+
+    telegram: bool = True
+    interval: int = Field(default=300, ge=30, description='seconds between polls')
+    harvest: bool = Field(
+        default=True,
+        description='refresh results/global_top after each iteration, so a run interrupted '
+                    'at any point already has a harvest on disk')
+
+
 # --------------------------------------------------------------------------- top
 
 
@@ -310,6 +330,7 @@ class CampaignConfig(_Base):
     gates: GateConfig = GateConfig()
     stages: StagesConfig = StagesConfig()
     compute: ComputeConfig = ComputeConfig()
+    notify: NotifyConfig = NotifyConfig()
 
     @model_validator(mode='after')
     def _check(self) -> CampaignConfig:

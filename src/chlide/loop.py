@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -203,6 +204,39 @@ def _stop_relax_watcher(proc, log) -> None:
     log.emit(event='relax_watcher_stop', pid=proc.pid, returncode=proc.poll())
 
 
+def _start_telegram_reporter(cfg: CampaignConfig, run_dir: Path, log):
+    """Per-iteration Telegram, started with the run rather than by hand afterwards.
+
+    v10 launched with no reporter attached and nobody would have known until the first
+    iteration finished in silence. Same failure shape as the relax watcher: a thing the old
+    per-campaign workflow started separately, which the repo's launch path never picked up.
+
+    Detached, and NOT reaped in the finally: the reporter should outlive a driver that exits,
+    so the last iteration still gets reported. It stops itself, and the harvest kills it by
+    name as its second step.
+    """
+    if not cfg.notify.telegram:
+        log.emit(event='telegram_reporter_disabled')
+        return None
+    tool = Path(__file__).resolve().parent.parent.parent / 'tools' / 'nise_telegram_report.py'
+    if not tool.is_file():
+        log.emit(event='telegram_reporter_missing', tool=str(tool))
+        print(f'  WARNING: {tool} not found; no per-iteration Telegram')
+        return None
+    logfile = run_dir / 'logs' / 'telegram_report.log'
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, '-u', str(tool), '--run-dir', str(run_dir),
+           '--total', str(cfg.loop.iterations), '--interval', str(cfg.notify.interval)]
+    if not cfg.notify.harvest:
+        cmd.append('--no-harvest')
+    fh = logfile.open('a')
+    proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    log.emit(event='telegram_reporter_start', pid=proc.pid, log=str(logfile))
+    print(f'  telegram reporter pid {proc.pid} -> {logfile}')
+    return proc
+
+
 def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | None = None,
                  debug: bool = False, allow_foreign_gpu: bool = False,
                  dry_run: bool = False) -> int:
@@ -263,6 +297,7 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
     print(f'{run_id}\n  manifest {manifest}\n  events   {log.path}')
 
     watcher = _start_relax_watcher(cfg, run_dir, log)
+    _start_telegram_reporter(cfg, run_dir, log)
     t0 = time.time()
     try:
         with GpuLock(list(cfg.engine.devices)):
