@@ -75,6 +75,88 @@ CASCADE_STAGES = [
 ]
 
 
+REFERENCE_DIR = Path('/home/data/yuvaln/main_pipeline_v6/input/reference_structures')
+
+
+def experimental_coordination(ref_dir: Path = REFERENCE_DIR) -> pd.DataFrame | None:
+    """Measure every His-coordinated Mg-chlorophyll in the reference crystal structures.
+
+    Without this the geometry columns are numbers with no scale: we could see that one
+    campaign differed from another but not which, if either, resembled a real coordination
+    bond. Returns None when the structures are not present.
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+    try:
+        import prody as pr
+    except ImportError:
+        return None
+    pr.confProDy(verbosity='none')
+    unit = lambda v: v / np.linalg.norm(v)
+    ang = lambda a, b: float(np.degrees(np.arccos(np.clip(float(np.dot(a, b)), -1, 1))))
+    rows = []
+    for f in sorted(ref_dir.glob('*.pdb')) if ref_dir.is_dir() else []:
+        ag = pr.parsePDB(str(f))
+        if ag is None:
+            continue
+        don = ag.select('resname HIS and name NE2 ND1')
+        ligs = ag.select('resname CLA CHL BCL CL0')
+        if don is None or ligs is None:
+            continue
+        dc, dn, dch, drn = don.getCoords(), don.getNames(), don.getChids(), don.getResnums()
+        for lig in ligs.getHierView().iterResidues():
+            nm = {n: i for i, n in enumerate(lig.getNames())}
+            co = lig.getCoords()
+            pyr = next((g for g in (('NA', 'NB', 'NC', 'ND'), ('NA1', 'NB1', 'NC1', 'ND1'))
+                        if all(x in nm for x in g)), None)
+            mgn = next((x for x in ('MG', 'MG1') if x in nm), None)
+            if not pyr or not mgn:
+                continue
+            mg = co[nm[mgn]]
+            d = np.linalg.norm(dc - mg, axis=1)
+            j = int(d.argmin())
+            if d[j] > 3.0:                       # not coordinated by a histidine
+                continue
+            h = ag.select(f'chain {dch[j]} and resnum {drn[j]} and resname HIS')
+            if h is None:
+                continue
+            hn = {n: i for i, n in enumerate(h.getNames())}
+            hco = h.getCoords()
+            if not all(x in hn for x in ('CE1', 'CD2', 'ND1', 'NE2', 'CG')):
+                continue
+            Nd = hco[hn[dn[j]]]
+            nb = ((hco[hn['CE1']], hco[hn['CD2']]) if dn[j] == 'NE2'
+                  else (hco[hn['CE1']], hco[hn['CG']]))
+            N4 = np.array([co[nm[x]] for x in pyr])
+            c = N4.mean(0)
+            nrm = unit(np.linalg.svd(N4 - c)[2][2])
+            if np.dot(Nd - c, nrm) < 0:
+                nrm = -nrm
+            bis = unit(-(unit(nb[0] - Nd) + unit(nb[1] - Nd)))
+            w = unit(mg - Nd)
+            imn = unit(np.cross(nb[0] - Nd, nb[1] - Nd))
+            rows.append(dict(pdb=f.stem, his_mg=float(d[j]),
+                             axial_angle=ang(unit(Nd - mg), nrm),
+                             his_lonepair_angle=ang(w, bis),
+                             mg_imidazole_oop=float(np.degrees(np.arcsin(
+                                 abs(np.clip(float(np.dot(w, imn)), -1, 1))))),
+                             mg_out_of_plane=float(np.dot(mg - c, nrm))))
+    return pd.DataFrame(rows) if rows else None
+
+
+def geometry_drift(c: dict) -> tuple[float, float] | None:
+    """Spearman of lone-pair angle against iteration: did the loop degrade coordination?"""
+    d = c.get('cascade')
+    if d is None or 'his_lonepair_angle' not in d or 'iteration' not in d:
+        return None
+    x = d.dropna(subset=['iteration', 'his_lonepair_angle'])
+    if len(x) < 50 or x.iteration.nunique() < 4:
+        return None
+    from scipy.stats import spearmanr
+    r = spearmanr(x.iteration, x.his_lonepair_angle)
+    return float(r.statistic), float(r.pvalue)
+
+
 def numeric(d: pd.DataFrame) -> pd.DataFrame:
     for c in d.columns:
         if c not in ('name', 'sequence', 'output', 'xfold_config', 'stem', 'input'):
@@ -287,6 +369,58 @@ def build(camps: list[dict]) -> str:
                    f'<div class=scroll><table><thead><tr>{th}</tr></thead>'
                    f'<tbody>{tr}</tbody></table></div>')
 
+    # ---- coordination geometry against experimental ---------------------------
+    GEO = [('his_mg', 'Mg-N distance (A)', '{:.2f}'),
+           ('axial_angle', 'Axial angle (deg)', '{:.1f}'),
+           ('his_lonepair_angle', 'Lone-pair angle (deg)', '{:.1f}'),
+           ('mg_imidazole_oop', 'Mg off-imidazole (deg)', '{:.1f}'),
+           ('mg_out_of_plane', 'Mg doming (A, + = toward His)', '{:+.2f}')]
+    ref = experimental_coordination()
+    geo_rows = ''
+    if ref is not None:
+        hdr = ('<th class=n>experimental<br><span style="font-weight:400;opacity:.6">'
+               f'n={len(ref)}</span></th>'
+               + ''.join(f'<th class=n>{esc(c["name"])}<br>'
+                         '<span style="font-weight:400;opacity:.6">order set</span></th>'
+                         for c in camps))
+        for key, label, fmt in GEO:
+            cells = f'<td class=n><b>{fmt.format(ref[key].median())}</b>'
+            cells += (f'<br><span style="opacity:.55;font-size:.85em">'
+                      f'{fmt.format(ref[key].quantile(.1))} to '
+                      f'{fmt.format(ref[key].quantile(.9))}</span></td>')
+            lo, hi = ref[key].quantile(.1), ref[key].quantile(.9)
+            for c in camps:
+                o = c.get('order')
+                if o is None or key not in o.columns or o[key].isna().all():
+                    cells += '<td class=n>-</td>'
+                    continue
+                v = pd.to_numeric(o[key], errors='coerce')
+                out = int(((v < lo) | (v > hi)).sum())
+                mark = ' style="color:#b4451f;font-weight:650"' if out == len(v.dropna()) else ''
+                cells += (f'<td class=n{mark}>{fmt.format(v.median())}'
+                          f'<br><span style="opacity:.55;font-size:.85em">'
+                          f'{fmt.format(v.min())} to {fmt.format(v.max())}</span></td>')
+            geo_rows += f'<tr><td>{esc(label)}</td>{cells}</tr>'
+        geo_block = (f'<div class=scroll><table><thead><tr><th>Measure</th>{hdr}</tr>'
+                     f'</thead><tbody>{geo_rows}</tbody></table></div>')
+    else:
+        geo_block = '<p class=sub>Reference structures not available.</p>'
+
+    # ---- did the loop degrade coordination as it ran? -------------------------
+    drift = ''
+    for c in camps:
+        r = geometry_drift(c)
+        if r is None:
+            drift += (f'<tr><td>{esc(c["name"])}</td><td colspan=3 class=why>'
+                      'no geometry columns (cascade predates them)</td></tr>')
+            continue
+        rho, pv = r
+        verdict = ('degraded as the loop ran' if rho > 0.15 and pv < 0.01
+                   else 'improved as the loop ran' if rho < -0.15 and pv < 0.01
+                   else 'no trend')
+        drift += (f'<tr><td>{esc(c["name"])}</td><td class=n>{rho:+.3f}</td>'
+                  f'<td class=n>{pv:.1g}</td><td class=why>{verdict}</td></tr>')
+
     gen = datetime.now().strftime('%Y-%m-%d %H:%M')
     names = ', '.join(c['name'] for c in camps)
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
@@ -352,6 +486,29 @@ is below.</p>
 <tbody>{corr}</tbody></table></div>
 <small class=note>Spearman over the shortlist. This is evidence about how to read the ranking,
 not a result about binding &mdash; nothing here has been measured in the lab.</small>
+
+<h2>Coordination geometry against real structures</h2>
+<div class=callout>
+<p>The geometry columns are only interpretable against something real. The experimental
+column measures every His-coordinated Mg-chlorophyll in the reference crystal structures,
+giving the distribution a designed site should fall inside.</p>
+<p>Campaign columns are the <b>order sets</b> &mdash; the designs that would actually be
+synthesised. A figure in red sits outside the experimental 10&ndash;90% range for every
+design in that set.</p>
+</div>
+{geo_block}
+<small class=note>Mg doming fails in every campaign: the Rosetta ligand params hold the
+chlorin planar, so the magnesium cannot dome toward the axial ligand the way it does in
+nature. That row is QC on the method, not a property of the designs &mdash; see
+<code>docs/CALIBRATION.md</code>.</small>
+
+<h2>Did the loop degrade coordination as it ran?</h2>
+<div class=scroll><table>
+<thead><tr><th>Campaign</th><th class=n>rho: lone-pair angle vs iteration</th>
+<th class=n>p</th><th>Reading</th></tr></thead>
+<tbody>{drift}</tbody></table></div>
+<small class=note>Measured over every design the cascade scored, not just the shortlist. A
+positive value means later iterations produced worse-oriented histidines than earlier ones.</small>
 
 <h2>Suggested order sets</h2>
 {orders or '<p class=sub>No campaign has an ORDER directory.</p>'}
