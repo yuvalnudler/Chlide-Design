@@ -28,6 +28,18 @@ PREEXISTING = {
     _PRED,
 }
 
+_FINAL_REPORT = Stage(
+    name='final_iteration_report',
+    tool='nise_telegram_report',
+    args=('--once', '--no-harvest'),
+    # Runs FIRST, before the driver and reporter are stopped. The per-iteration reporter polls
+    # on an interval and the harvest kills it moments later, so the last iteration's album was
+    # simply never sent -- v10 banked 25 iterations and reported 24.
+    reads=('input/sampling_dataframes/*.pkl',),
+    writes=('logs/plots',),
+    optional=True,
+)
+
 _RELAX = Stage(
     name='relax_pool',
     tool='relax_pool',
@@ -140,7 +152,7 @@ _FIGURES = Stage(
     optional=True,
 )
 
-ORDER = [_RELAX, _HARVEST, _CASCADE, _DIMER, _SHORTLIST, _FOLD_CHECK,
+ORDER = [_FINAL_REPORT, _RELAX, _HARVEST, _CASCADE, _DIMER, _SHORTLIST, _FOLD_CHECK,
          _BURIAL, _REBUILD, _SASA, _ORDER_SET, _REPORT, _FIGURES]
 
 

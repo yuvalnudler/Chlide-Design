@@ -243,3 +243,38 @@ def discover_chat_ids() -> list:
                             "username": chat.get("username"),
                             "first_name": chat.get("first_name")})
     return out
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Send a message from the shell, so the harvest can report its own progress.
+
+    `finish_at_iter.sh` runs after the driver and the per-iteration reporter are both dead, so
+    without this it has no voice: a harvest could fail at 03:00 and the first anyone knew was
+    an absent album. Credentials still come only from ~/.config/pipeline_telegram.env.
+
+        python -m chlide.notify "text"            send
+        python -m chlide.notify --photo a.png b.png --caption "..."
+    """
+    import argparse
+    ap = argparse.ArgumentParser(prog='chlide.notify', description=main.__doc__)
+    ap.add_argument('text', nargs='*', help='message body; joined with spaces')
+    ap.add_argument('--photo', nargs='*', type=Path, default=(),
+                    help='send these images as an album instead of / as well as the text')
+    ap.add_argument('--caption', default='')
+    ap.add_argument('--plain', action='store_true', help='no HTML parsing')
+    a = ap.parse_args(argv)
+    ok = True
+    if a.text:
+        ok = send_message(' '.join(a.text), parse_mode=None if a.plain else 'HTML')
+    if a.photo:
+        existing = [p for p in a.photo if Path(p).is_file()]
+        if existing:
+            ok = send_photo_album(existing, caption=a.caption) and ok
+    # Never fail the caller: a harvest must not die because Telegram is unreachable.
+    if not ok:
+        _log('send failed; continuing anyway')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

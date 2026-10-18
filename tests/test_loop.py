@@ -448,3 +448,43 @@ def test_credentials_are_never_in_the_repo_or_on_a_command_line():
             if pat in txt and 'pipeline_telegram.env' not in txt:
                 bad.append(f'{f.relative_to(root)}: passes {pat}')
     assert not bad, '\n  '.join(bad)
+
+
+def test_campaign_start_is_announced():
+    """The first per-iteration report is an hour away at production width, so without this
+    the only evidence a launch worked is a process on a box nobody is watching."""
+    from types import SimpleNamespace
+    from chlide.loop import _announce_start
+    events = []
+    log = SimpleNamespace(emit=lambda **kw: events.append(kw))
+    cfg = SimpleNamespace(notify=SimpleNamespace(telegram=False))
+    _announce_start(cfg, Path('/tmp'), 'rid', log)
+    assert events == [], 'telegram disabled must announce nothing'
+    src = (Path(__file__).resolve().parents[1] / 'src' / 'chlide' / 'loop.py').read_text()
+    assert '_announce_start(cfg, run_dir, run_id, log)' in src, 'never called'
+
+
+def test_harvest_announces_every_stage_and_the_count_is_right():
+    """Each stage reports to Telegram, numbered N/TOTAL. If a stage is added without bumping
+    STAGE_TOTAL the numbering lies, which is the kind of small wrongness nobody re-checks."""
+    import re
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'finish_at_iter.sh'
+    if not sh.is_file():
+        pytest.skip('finish_at_iter.sh not migrated')
+    body = sh.read_text()
+    declared = int(re.search(r'^STAGE_TOTAL=(\d+)', body, re.M).group(1))
+    calls = len(re.findall(r'^stage "', body, re.M))
+    assert calls == declared, f'{calls} stage() calls but STAGE_TOTAL={declared}'
+    assert 'tg(){' in body and 'chlide.notify' in body, 'no way to reach Telegram'
+
+
+def test_harvest_reports_the_final_iteration_before_killing_the_reporter():
+    """v10 banked 25 iterations and reported 24: the reporter polls on an interval and the
+    harvest kills it moments later, so the last album was never sent."""
+    sh = Path(__file__).resolve().parents[1] / 'tools' / 'finish_at_iter.sh'
+    if not sh.is_file():
+        pytest.skip('finish_at_iter.sh not migrated')
+    body = sh.read_text()
+    final = body.index('nise_telegram_report.py')
+    kill = body.index('stopping driver and reporter')
+    assert final < kill, 'the final report must run BEFORE the reporter is stopped'

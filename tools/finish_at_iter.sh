@@ -23,6 +23,8 @@ set -u
 # the v9 harvest: the script cd's into the run dir, so a relative "tools/x.py" resolved to
 # <campaign>/tools/x.py, which does not exist, and all 11 stages failed in 19 seconds.
 TOOLS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# chlide.notify lives in the repo src/, beside tools/
+export PYTHONPATH="$(dirname "$TOOLS")/src${PYTHONPATH:+:$PYTHONPATH}"
 PY=/home/yigall/mambaforge/envs/lasermpnn/bin/python
 RPY=/home/yigall/mambaforge/envs/Rosetta/bin/python
 STOP_AT=${1:?usage: finish_at_iter.sh <iteration> [--run-dir DIR]}
@@ -58,6 +60,19 @@ fi
 AF3_TOP=${AF3_TOP:-200}
 cd "$RUN" || exit 1
 say(){ printf '\n[%s] %s\n' "$(date +%F' '%H:%M:%S)" "$*"; }
+
+# The harvest runs after the driver and the per-iteration reporter are both dead, so it has
+# to speak for itself. stage() both logs and sends; say() stays local-only for sub-lines.
+# Numbered, so a glance at the phone says how far along it is.
+STAGE_N=0
+STAGE_TOTAL=15
+CAMPAIGN=$(basename "$RUN")
+tg(){ "$PY" -m chlide.notify "$@" >/dev/null 2>&1 || true; }
+stage(){
+  STAGE_N=$((STAGE_N + 1))
+  say "[$STAGE_N/$STAGE_TOTAL] $*"
+  tg "<b>${CAMPAIGN}</b> harvest ${STAGE_N}/${STAGE_TOTAL}: $*"
+}
 
 # GPU stages run BY DEFAULT. v8's harvest skipped both because NISE_ALLOW_GPU was unset, and
 # they had to be run by hand a day later -- the shortlist sat without its dimer pAE until then.
@@ -105,9 +120,17 @@ while [ ! -f "$PKL" ] || [ ! -f "$QUE" ]; do
   sleep 60
 done
 say "iteration ${STOP_AT} banked ($(ls input/sampling_dataframes/iter_*_data.pkl | wc -l) complete)"
+tg "<b>${CAMPAIGN}</b>: harvest starting. $(ls input/sampling_dataframes/iter_*_data.pkl | wc -l) iterations banked; ${STAGE_TOTAL} stages to run."
 
 # --- 2. stop the loop; GPUs are free from here -------------------------------------------------
-say "stopping driver and reporter"
+# The per-iteration reporter polls on an interval, and the harvest kills it moments later --
+# so the FINAL iteration's album was simply never sent (v10 banked 25 and reported 24). Give
+# it one last synchronous pass before stopping it.
+stage "final per-iteration report, before the reporter is stopped"
+"$PY" "$TOOLS"/nise_telegram_report.py --run-dir "$RUN" --once --no-harvest \
+  >> logs/telegram_report.log 2>&1 || say "NOTE: final per-iteration report returned non-zero"
+
+stage "stopping driver and reporter"
 pkill -f "$DRIVER" 2>/dev/null
 # Scope every pkill to THIS run directory. A bare `pkill -f nise_telegram_report.py` matches
 # the reporter of any campaign on the box, and the Boltz line below would have killed v6b's
@@ -119,7 +142,7 @@ sleep 5
 say "GPUs released: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader | tr '\n' ' ')"
 
 # --- 3. catch the relax pool up, then retire the watcher ---------------------------------------
-say "stopping the relax watcher, then catching the pool up on the final iteration"
+stage "stopping the relax watcher, then catching the pool up on the final iteration"
 pkill -f "$RUN/tools/relax_watcher.sh" 2>/dev/null
 sleep 3
 while pgrep -f relax_pool.py >/dev/null; do sleep 20; done      # let any in-flight pass finish
@@ -127,16 +150,16 @@ while pgrep -f relax_pool.py >/dev/null; do sleep 20; done      # let any in-fli
 say "relaxed pool: $(( $(wc -l < results/relaxed_pool/index.csv) - 1 )) designs"
 
 # --- 4. refresh the harvest so metrics.csv covers every iteration -------------------------------
-say "harvest"
+stage "harvest"
 "$PY" "$TOOLS"/harvest_global_top.py --run-dir "$RUN" --top 50
 
 # --- 5. terminal cascade, CPU only --------------------------------------------------------------
-say "cascade (--pre-relaxed: holo minimisation already done during the run)"
+stage "cascade (--pre-relaxed: holo minimisation already done during the run)"
 nice -n5 "$RPY" "$TOOLS"/polizzi_cascade.py --run-dir "$RUN" --from-metrics --pre-relaxed \
      --workers "$WORKERS" || say "WARNING: cascade returned non-zero"
 
 # --- 6. AF3 aggregation proxy, the only GPU step ------------------------------------------------
-say "AF3 two-copy interface pAE, top ${AF3_TOP} by BUNs (GPU, ~1.2 h)"
+stage "AF3 two-copy interface pAE, top ${AF3_TOP} by BUNs (GPU, ~1.2 h)"
 if gpus_free; then
   "$PY" "$TOOLS"/af3_interface_pae.py --run-dir "$RUN" --top "$AF3_TOP" --devices 0,1,2,3 \
      || say "WARNING: AF3 stage returned non-zero"
@@ -157,7 +180,7 @@ say "GPUs now free for good: $(nvidia-smi --query-gpu=memory.used --format=csv,n
 # failed with "no top*.pdb ... run final_shortlist.py first" and FileNotFoundError. v5 only
 # worked because an earlier run had left those files on disk. Correct order: build the
 # shortlist, score it, then rebuild it so the AF3 and burial columns land in the ranking.
-say "final shortlist"
+stage "final shortlist"
 "$PY" "$TOOLS"/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist returned non-zero"
 # ---- ENGINE-DEPENDENT fold check ---------------------------------------------------------
 # The two GPU scoring stages answer different questions and are NOT interchangeable:
@@ -191,12 +214,12 @@ print("AF3" if str(f).lower().startswith("af3") else ("Boltz" if f else ""))
   grep -lq 'from af3_adapter import' "$1"/run_nise_*.py 2>/dev/null && echo AF3 || echo Boltz
 }
 _ENGINE=$(detect_engine "$RUN")
-say "fold check: campaign engine is ${_ENGINE}, cross-checking with the other model"
+stage "fold check: campaign engine is ${_ENGINE}, cross-checking with the other model"
 if [ "$_ENGINE" = "AF3" ]; then
   "$PY" "$TOOLS"/crossfold.py --run-dir "$RUN" --top 25 --mode complex --devices 0,1,2,3 \
        || say "WARNING: Boltz cross-fold returned non-zero"
 else
-say "AF3 monomer fold confidence, top 25 (GPU, ~5 min)"
+stage "AF3 monomer fold confidence, top 25 (GPU, ~5 min)"
 if gpus_free; then
   "$PY" -u "$TOOLS"/af3_monomer.py --run-dir "$RUN" --top 25 --devices 0,1,2,3 \
      || say "WARNING: AF3 monomer stage returned non-zero"
@@ -205,22 +228,22 @@ else
 fi
 fi
 
-say "strict burial rescore (alpha=9)"
+stage "strict burial rescore (alpha=9)"
 "$PY" "$TOOLS"/burial_rescore.py --run-dir "$RUN" || say "WARNING: burial rescore returned non-zero"
-say "rebuilding the shortlist so AF3-monomer and burial columns enter the ranking"
+stage "rebuilding the shortlist so AF3-monomer and burial columns enter the ranking"
 "$PY" "$TOOLS"/final_shortlist.py --run-dir "$RUN" --top 25 || say "WARNING: shortlist rebuild returned non-zero"
-say "SASA ranking"
+stage "SASA ranking"
 "$PY" "$TOOLS"/sasa_rank.py --run-dir "$RUN" --top 25 || say "WARNING: sasa returned non-zero"
 
 # --- 8. figures and the final Telegram report -----------------------------------------------
 # Easy to forget, and the reporter is already dead by this point (step 2 kills it before any
 # result exists), so without this the campaign finishes silently and produces no plots.
-say "picking the order set (top 8, de-duplicated)"
+stage "picking the order set (top 8, de-duplicated)"
 "$PY" "$TOOLS"/order_set.py --run-dir "$RUN" --n 8 || say "NOTE: order set not written (see above)"
 
-say "joined HTML report (all measures, sortable)"
+stage "joined HTML report (all measures, sortable)"
 "$PY" "$TOOLS"/make_report.py --run-dir "$RUN" || say "WARNING: report returned non-zero"
-say "figures + final Telegram report"
+stage "figures + final Telegram report"
 "$PY" "$TOOLS"/paper_figures.py --run-dir "$RUN" --telegram || say "WARNING: figures/telegram returned non-zero"
 
 # Report the TRUTH, not an aspiration. This line used to print the shortlist path

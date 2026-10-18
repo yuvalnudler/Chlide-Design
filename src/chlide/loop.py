@@ -163,6 +163,33 @@ def _boltz_executable() -> str:
     return f'{py} {patch}'
 
 
+def _announce_start(cfg: CampaignConfig, run_dir: Path, run_id: str, log) -> None:
+    """Say on Telegram that a campaign has begun.
+
+    The first per-iteration report is an hour away at production width, so without this the
+    only evidence a launch worked is a process on a box nobody is looking at.
+    """
+    if not cfg.notify.telegram:
+        return
+    try:
+        from chlide import notify
+        seed = cfg.loop.seed_per_backbone
+        width = (f'{seed}/backbone while seeding, then {cfg.loop.per_backbone}'
+                 if seed else f'{cfg.loop.per_backbone}/backbone')
+        lines = [f'<b>{cfg.name} started</b>',
+                 f'  engine <b>{cfg.engine.fold}</b> -> cross-check {cfg.engine.cross_check}',
+                 f'  objective {cfg.loop.objective}',
+                 f'  {width}, {cfg.loop.top_backbones} backbones, '
+                 f'{cfg.loop.iterations} iterations max',
+                 f'  geometry gate: axial &lt;= {cfg.gates.axial_angle_max}, lone-pair &lt;= '
+                 f'{cfg.gates.lonepair_angle_max}, off-imid &lt;= {cfg.gates.mg_imidazole_oop_max} deg',
+                 f'  <code>{run_dir}</code>']
+        notify.send_message('\n'.join(lines))
+        log.emit(event='telegram_start_announced')
+    except Exception as e:        # never let a notification failure stop a campaign
+        log.emit(event='telegram_start_failed', error=f'{type(e).__name__}: {e}')
+
+
 def _start_relax_watcher(cfg: CampaignConfig, run_dir: Path, log) -> subprocess.Popen | None:
     """Relax the pool DURING the run, so the harvest does not inherit the whole backlog.
 
@@ -305,6 +332,7 @@ def run_campaign(cfg: CampaignConfig, run_dir: Path, *, campaign_file: Path | No
 
     watcher = _start_relax_watcher(cfg, run_dir, log)
     _start_telegram_reporter(cfg, run_dir, log)
+    _announce_start(cfg, run_dir, run_id, log)
     t0 = time.time()
     try:
         with GpuLock(list(cfg.engine.devices)):
