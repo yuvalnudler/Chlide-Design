@@ -173,13 +173,13 @@ def load(run: Path) -> pd.DataFrame:
     return s
 
 
-def order_set(run: Path) -> tuple[list[str], str]:
+def order_set(run: Path, odir: Path | None = None) -> tuple[list[str], str]:
     """The designs picked for synthesis, in pick order, plus the csv they came from.
 
     Returns ([], '') when the campaign has no ORDER directory, so the section simply
     does not render for a campaign that has not been through selection yet.
     """
-    d = run / 'results' / 'final' / 'ORDER'
+    d = odir or (run / 'results' / 'final' / 'ORDER')
     if not d.is_dir():
         return [], ''
     csvs = sorted(d.glob('order*.csv'))
@@ -301,7 +301,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--run-dir', type=Path, default=Path(os.environ.get('CHLIDE_RUN_DIR') or Path(__file__).resolve().parent.parent))
     ap.add_argument('--out', type=Path, default=None)
+    ap.add_argument('--order-dir', type=Path, default=None,
+                    help='read the order set from here instead of results/final/ORDER')
     a = ap.parse_args()
+    order_dir = a.order_dir
     run = a.run_dir.resolve()   # `--run-dir .` must still name the campaign, not ''
     df = load(run)
     out = a.out or (run / 'results' / 'figures' / 'report.html')
@@ -314,7 +317,7 @@ def main() -> int:
     head = ''.join(
         f'<th data-i="{i}" title="{html.escape(t)}">{html.escape(lbl)}<span class=ar></span></th>'
         for i, (k, lbl, f, t) in enumerate(cols))
-    picks, pick_csv = order_set(run)
+    picks, pick_csv = order_set(run, order_dir)
     reasons = order_reasons(df, picks) if picks else {}
     pick_rank = {n: i + 1 for i, n in enumerate(picks)}
 

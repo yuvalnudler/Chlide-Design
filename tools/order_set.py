@@ -119,6 +119,13 @@ def main() -> int:
                                  or Path(__file__).resolve().parent.parent))
     ap.add_argument('--n', type=int, default=8)
     ap.add_argument('--max-identity', type=float, default=0.90)
+    ap.add_argument('--max-lonepair', type=float, default=None, metavar='DEG',
+                    help='reject designs whose His lone pair points more than DEG from the Mg. '
+                         'Off by default. 14 is the 75th percentile of 57 His-coordinated '
+                         'Mg-chlorophylls in the reference crystals; 19 is their 98th.')
+    ap.add_argument('--out-dir', type=Path, default=None,
+                    help='write the set here instead of results/final/ORDER, for trying a '
+                         'rule without disturbing the one already chosen')
     ap.add_argument('--force', action='store_true',
                     help='replace an ORDER directory this tool did not generate')
     a = ap.parse_args()
@@ -138,6 +145,15 @@ def main() -> int:
     mr = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mr)
     df = mr.load(R)
+    if a.max_lonepair is not None:
+        if 'his_lonepair_angle' not in df.columns or df['his_lonepair_angle'].isna().all():
+            print('--max-lonepair asked for, but this campaign has no lone-pair angle column',
+                  file=sys.stderr)
+            return 1
+        before = len(df)
+        df = df[df['his_lonepair_angle'].notna() & (df['his_lonepair_angle'] <= a.max_lonepair)]
+        print(f'  His lone-pair angle <= {a.max_lonepair:g} deg: {len(df)} kept '
+              f'({before - len(df)} dropped)')
     sel, log = pick(df, a.n, a.max_identity)
     for line in log:
         print('  ' + line)
@@ -145,7 +161,7 @@ def main() -> int:
         print('nothing survived selection', file=sys.stderr)
         return 1
 
-    out = R / 'results' / 'final' / 'ORDER'
+    out = a.out_dir or (R / 'results' / 'final' / 'ORDER')
     marker = out / '.generated_by_order_set'
     # An ORDER directory can be hand-curated -- v8's was, for months -- and the picks in it may
     # encode a judgement this rule does not. Refuse to clobber one we did not write.
