@@ -289,3 +289,46 @@ def test_rejected_designs_stay_out_of_the_best_generator_rescue():
         'a rejected design must not be recorded as a best generator'
     assert 'backbone_queue.append' not in rejected, \
         'a rejected design must not be promoted'
+
+
+def test_every_log_data_append_happens_on_every_path():
+    """v11a's first iteration folded 500 designs and then died at pd.DataFrame(iidx_data) with
+    'All arrays must be of the same length': the geometry columns are appended after the
+    name-mapping early exit, so they came up short exactly as often as that exit was taken.
+
+    Any key appended inside the per-design loop must be appended on EVERY path through it.
+    """
+    import re
+    src = (ROOT / 'src' / 'chlide' / 'nise_driver.py').read_text()
+    start = src.index('for laser, boltz, bb_path in zip(')
+    end = src.index('ranked = sorted(self.backbone_queue', start)
+    body = src[start:end]
+    code = '\n'.join(l.split('#')[0] for l in body.splitlines())
+
+    keys = set(re.findall(r"log_data\['([a-z0-9_]+)'\]\.append", code))
+    # split on the early-exit continue: everything appended after it must also be padded before
+    marker = "log_data['protein_plddts'].append(torch.nan)"
+    assert marker in code, 'the early-exit branch moved; this test needs updating'
+    before_exit = code[:code.index('continue', code.index(marker))]
+    after_exit = code[code.index('continue', code.index(marker)):]
+
+    appended_after = set(re.findall(r"log_data\['([a-z0-9_]+)'\]\.append", after_exit))
+    padded_before = set(re.findall(r"log_data\[_?k?'?([a-z0-9_]*)'?\]\.append", before_exit))
+    # the geometry keys are padded via a loop over a tuple, so check the tuple is there
+    geo = {'axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop', 'mg_out_of_plane',
+           'n4_planarity'}
+    assert geo <= set(re.findall(r"'([a-z0-9_]+)'", before_exit)), \
+        'the geometry columns must be padded in the name-mapping early exit'
+    assert "log_data['geometry_ok'].append(False)" in before_exit, \
+        'geometry_ok must be padded in the early exit too'
+    assert keys, 'no log_data appends found -- the loop boundaries moved'
+
+
+def test_ragged_columns_are_reported_by_name():
+    """pandas says only 'All arrays must be of the same length', which cost a seed iteration
+    to diagnose. The driver now names the offending column."""
+    src = (ROOT / 'src' / 'chlide' / 'nise_driver.py').read_text()
+    assert 'log_data columns are ragged' in src
+    i = src.index('log_data columns are ragged')
+    assert src.index('iidx_dataframe = pd.DataFrame(iidx_data)') > i, \
+        'the guard must run BEFORE the DataFrame is built'

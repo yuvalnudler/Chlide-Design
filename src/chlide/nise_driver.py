@@ -660,6 +660,14 @@ class DesignCampaign:
                 log_data['ligand_is_buried'].append(False)
                 log_data['ligand_plddts'].append(torch.nan)
                 log_data['protein_plddts'].append(torch.nan)
+                # The geometry columns are appended further down, AFTER this continue, so
+                # they must be padded here or they come up short exactly as often as name
+                # mapping fails -- which is what crashed v11a's first iteration at
+                # pd.DataFrame(iidx_data) with "All arrays must be of the same length".
+                for _k in ('axial_angle', 'his_lonepair_angle', 'mg_imidazole_oop',
+                           'mg_out_of_plane', 'n4_planarity'):
+                    log_data[_k].append(float('nan'))
+                log_data['geometry_ok'].append(False)
                 continue
 
             # Remap the boltz structure ligand atoms with the name mapping.
@@ -1210,6 +1218,17 @@ def main(use_wandb, reduce_executable_path, reduce_hetdict_path, **kwargs):
         iidx_data.update(dict(log_data))
 
         # Write data to disk.
+        # Say WHICH column is short. pandas only reports "All arrays must be of the same
+        # length", which cost a full seed iteration to diagnose when the geometry columns
+        # missed the name-mapping early exit.
+        _lens = {k: len(v) for k, v in iidx_data.items() if hasattr(v, '__len__')}
+        if _lens and len(set(_lens.values())) > 1:
+            _mode = max(set(_lens.values()), key=list(_lens.values()).count)
+            _bad = {k: n for k, n in _lens.items() if n != _mode}
+            raise RuntimeError(
+                f'log_data columns are ragged: most are {_mode}, but {_bad} differ. Every '
+                f'append must happen on every path through the per-design loop, including '
+                f'the early exits.')
         iidx_dataframe = pd.DataFrame(iidx_data)
         iidx_dataframe.to_pickle(design_campaign.sampling_dataframe_path / f'iter_{iidx}_data.pkl')
 
